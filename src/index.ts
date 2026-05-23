@@ -146,7 +146,10 @@ export async function publish(
 
   // All go.mod files: submodules + root
   const submodules = discoverSubmoduleGoMods(cwd, config.getModules());
-  const allGoMods = [path.join(cwd, 'go.mod'), ...submodules];
+  const allGoMods: readonly string[] = [
+    path.join(cwd, 'go.mod'),
+    ...submodules,
+  ];
 
   for (const goModPath of allGoMods) {
     const prefix = deriveTagPrefix(goModPath, cwd);
@@ -157,4 +160,4 @@ export async function publish(
   logger.log('Tagged %d module(s) at v%s.', allGoMods.length, version);
 }
 
-export default { verifyConditions, prepare, publish };
+export default { verifyConditions, prepare, publish } as const;

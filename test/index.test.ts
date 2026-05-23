@@ -275,9 +275,13 @@ describe('verifyConditions()', () => {
 
   it('passes when go.mod exists and git is available', async () => {
     writeGoMod(tmpDir, 'github.com/example/repo');
-    const mockExec = jest.fn() as unknown as ExecFn;
+    const mockExec = jest.fn();
     await expect(
-      verifyConditions({} as GomodPluginConfig, baseCtx(), mockExec),
+      verifyConditions(
+        {} as GomodPluginConfig,
+        baseCtx(),
+        mockExec as unknown as ExecFn,
+      ),
     ).resolves.toBeUndefined();
   });
 
@@ -291,16 +295,24 @@ describe('verifyConditions()', () => {
     writeGoMod(tmpDir, 'github.com/example/repo');
     const mockExec = jest.fn().mockImplementationOnce(() => {
       throw new Error('git not found');
-    }) as unknown as ExecFn;
+    });
     await expect(
-      verifyConditions({} as GomodPluginConfig, baseCtx(), mockExec),
+      verifyConditions(
+        {} as GomodPluginConfig,
+        baseCtx(),
+        mockExec as unknown as ExecFn,
+      ),
     ).rejects.toThrow(/git is not available/);
   });
 
   it('logs a warning (not an error) when no submodules exist', async () => {
     writeGoMod(tmpDir, 'github.com/example/repo');
-    const mockExec = jest.fn() as unknown as ExecFn;
-    await verifyConditions({} as GomodPluginConfig, baseCtx(), mockExec);
+    const mockExec = jest.fn();
+    await verifyConditions(
+      {} as GomodPluginConfig,
+      baseCtx(),
+      mockExec as unknown as ExecFn,
+    );
     expect(logger.log).toHaveBeenCalledWith(
       expect.stringContaining('single-module mode'),
     );
@@ -339,10 +351,11 @@ describe('prepare()', () => {
       'github.com/example/repo v1.0.0',
     ]);
 
+    const mockExec = jest.fn();
     await prepare(
       { skipGoModTidy: true } as GomodPluginConfig,
       makeCtx('2.0.0'),
-      jest.fn() as unknown as ExecFn,
+      mockExec as unknown as ExecFn,
     );
 
     const content = fs.readFileSync(path.join(subDir, 'go.mod'), 'utf8');
@@ -357,7 +370,7 @@ describe('prepare()', () => {
       'github.com/example/repo v1.0.0',
     ]);
 
-    const mockExec = jest.fn() as jest.Mock;
+    const mockExec = jest.fn();
     await prepare(
       {} as GomodPluginConfig,
       makeCtx('2.0.0'),
@@ -378,7 +391,7 @@ describe('prepare()', () => {
       'github.com/example/repo v1.0.0',
     ]);
 
-    const mockExec = jest.fn() as jest.Mock;
+    const mockExec = jest.fn();
     await prepare(
       { skipGoModTidy: true } as GomodPluginConfig,
       makeCtx('2.0.0'),
@@ -393,10 +406,11 @@ describe('prepare()', () => {
 
   it('logs and continues when no submodules exist', async () => {
     writeGoMod(tmpDir, 'github.com/example/repo');
+    const mockExec = jest.fn();
     await prepare(
       { skipGoModTidy: true } as GomodPluginConfig,
       makeCtx('2.0.0'),
-      jest.fn() as unknown as ExecFn,
+      mockExec as unknown as ExecFn,
     );
     expect(logger.log).toHaveBeenCalledWith(
       expect.stringContaining('No submodules'),
@@ -434,7 +448,7 @@ describe('publish()', () => {
     fs.mkdirSync(subDir, { recursive: true });
     writeGoMod(subDir, 'github.com/example/repo/pkg/foo');
 
-    const mockExec = jest.fn() as jest.Mock;
+    const mockExec = jest.fn();
     await publish(
       {} as GomodPluginConfig,
       makeCtx('1.2.3'),
@@ -452,7 +466,7 @@ describe('publish()', () => {
   it('pushes tags when pushTags is true (default)', async () => {
     writeGoMod(tmpDir, 'github.com/example/repo');
 
-    const mockExec = jest.fn() as jest.Mock;
+    const mockExec = jest.fn();
     await publish(
       {} as GomodPluginConfig,
       makeCtx('1.2.3'),
@@ -468,7 +482,7 @@ describe('publish()', () => {
   it('does not push tags when pushTags is false', async () => {
     writeGoMod(tmpDir, 'github.com/example/repo');
 
-    const mockExec = jest.fn() as jest.Mock;
+    const mockExec = jest.fn();
     await publish(
       { pushTags: false } as GomodPluginConfig,
       makeCtx('1.2.3'),
@@ -488,10 +502,14 @@ describe('publish()', () => {
       if (String(cmd).startsWith('git tag')) {
         throw new Error('fatal: tag already exists');
       }
-    }) as unknown as ExecFn;
+    });
 
     await expect(
-      publish({} as GomodPluginConfig, makeCtx('1.2.3'), mockExec),
+      publish(
+        {} as GomodPluginConfig,
+        makeCtx('1.2.3'),
+        mockExec as unknown as ExecFn,
+      ),
     ).resolves.toBeUndefined();
   });
 });

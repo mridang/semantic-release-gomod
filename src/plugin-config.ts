@@ -14,7 +14,7 @@ export interface GomodPluginConfig extends Config {
    *
    * @example ["assert/**\/go.mod", "env/**\/go.mod"]
    */
-  readonly modules?: string | string[];
+  readonly modules?: string | readonly string[];
 
   /**
    * Skip running `go mod tidy` in each submodule directory after
@@ -48,9 +48,9 @@ export class GomodConfig {
    * normalised to an array. Returns undefined when not configured,
    * which signals the plugin to auto-discover.
    *
-   * @returns Array of glob strings, or undefined for auto-detection.
+   * @returns Readonly array of glob strings, or undefined for auto-detection.
    */
-  getModules(): string[] | undefined {
+  getModules(): readonly string[] | undefined {
     const { modules } = this.config;
     if (!modules) return undefined;
     if (typeof modules === 'string') return [modules];

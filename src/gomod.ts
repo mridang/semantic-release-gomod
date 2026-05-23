@@ -11,6 +11,17 @@ export interface Logger {
 }
 
 /**
+ * Read a directory, returning an empty array on any I/O error.
+ */
+function safeReadDir(dir: string): readonly fs.Dirent[] {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Walk `root` recursively and return the absolute paths of every
  * go.mod file found, excluding the root-level go.mod itself.
  *
@@ -23,15 +34,12 @@ export interface Logger {
  */
 export function discoverSubmoduleGoMods(
   root: string,
-  globPatterns?: string[],
-): string[] {
+  globPatterns?: readonly string[],
+): readonly string[] {
   if (globPatterns && globPatterns.length > 0) {
-    const results: string[] = [];
-    for (const pattern of globPatterns) {
-      // Simple glob: support "**" as a recursive wildcard
-      const resolved = expandGlob(root, pattern);
-      results.push(...resolved);
-    }
+    const results = globPatterns.flatMap((pattern) =>
+      expandGlob(root, pattern),
+    );
     return [...new Set(results)].sort();
   }
 
@@ -44,24 +52,14 @@ export function discoverSubmoduleGoMods(
 /**
  * Recursively walk `dir` and return absolute paths of all go.mod files.
  */
-function walkForGoMods(dir: string): string[] {
-  const results: string[] = [];
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return results;
-  }
-  for (const entry of entries) {
-    if (entry.name === 'vendor' || entry.name === 'node_modules') continue;
+function walkForGoMods(dir: string): readonly string[] {
+  return safeReadDir(dir).flatMap((entry) => {
+    if (entry.name === 'vendor' || entry.name === 'node_modules') return [];
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      results.push(...walkForGoMods(full));
-    } else if (entry.isFile() && entry.name === 'go.mod') {
-      results.push(full);
-    }
-  }
-  return results;
+    if (entry.isDirectory()) return [...walkForGoMods(full)];
+    if (entry.isFile() && entry.name === 'go.mod') return [full];
+    return [];
+  });
 }
 
 /**
@@ -69,33 +67,23 @@ function walkForGoMods(dir: string): string[] {
  * Only handles the patterns this plugin actually uses, e.g.
  * `"assert/**\/go.mod"` or `"env/*\/go.mod"`.
  */
-function expandGlob(root: string, pattern: string): string[] {
-  const parts = pattern.split('/');
-  return matchParts(root, parts);
+function expandGlob(root: string, pattern: string): readonly string[] {
+  return matchParts(root, pattern.split('/'));
 }
 
-function matchParts(dir: string, parts: string[]): string[] {
+function matchParts(dir: string, parts: readonly string[]): readonly string[] {
   if (parts.length === 0) return [];
   const [head, ...tail] = parts;
 
   if (head === '**') {
-    // Match zero or more directory levels
-    const results: string[] = [];
-    // Zero levels: continue with tail from current dir
-    results.push(...matchParts(dir, tail));
-    // One or more levels: descend into each subdirectory
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return results;
-    }
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        results.push(...matchParts(path.join(dir, entry.name), parts));
-      }
-    }
-    return results;
+    // Zero levels: continue with tail from current dir.
+    // One or more levels: descend into each subdirectory.
+    return [
+      ...matchParts(dir, tail),
+      ...safeReadDir(dir)
+        .filter((e) => e.isDirectory())
+        .flatMap((e) => matchParts(path.join(dir, e.name), parts)),
+    ];
   }
 
   if (tail.length === 0) {
@@ -109,19 +97,9 @@ function matchParts(dir: string, parts: string[]): string[] {
 
   if (head === '*') {
     // Single-level wildcard
-    const results: string[] = [];
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return results;
-    }
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        results.push(...matchParts(path.join(dir, entry.name), tail));
-      }
-    }
-    return results;
+    return safeReadDir(dir)
+      .filter((e) => e.isDirectory())
+      .flatMap((e) => matchParts(path.join(dir, e.name), tail));
   }
 
   // Literal segment
@@ -185,9 +163,7 @@ export function updateGoModRequires(
  * @returns Tag prefix string (empty string for the root module).
  */
 export function deriveTagPrefix(goModPath: string, repoRoot: string): string {
-  const rel = path.relative(repoRoot, path.dirname(goModPath));
-  // path.relative returns '' when the paths are equal (root module)
-  return rel;
+  return path.relative(repoRoot, path.dirname(goModPath));
 }
 
 /**
