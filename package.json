@@ -1,0 +1,73 @@
+{
+  "name": "@mridang/semantic-release-gomod",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "prepack": "tsc",
+    "build": "tsc",
+    "test": "jest --verbose --config=jest.config.mjs --runInBand",
+    "test:watch": "npm run test -- --watch",
+    "test:debug": "jest --verbose --config=jest.config.mjs --runInBand --detectOpenHandles",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "npx eslint .",
+    "lint:fix": "npx eslint . --fix"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "keywords": [
+    "semver",
+    "nodejs",
+    "semantic-release",
+    "go",
+    "golang",
+    "gomod"
+  ],
+  "author": {
+    "name": "Mridang Agarwalla",
+    "email": "mridang.agarwalla@gmail.com",
+    "url": "https://github.com/mridang"
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "Apache-2.0",
+  "description": "Semantic Release plugin for multi-module Go repositories: pins submodule require lines and creates per-module git tags",
+  "private": false,
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mridang/semantic-release-gomod.git"
+  },
+  "homepage": "https://github.com/mridang/semantic-release-gomod",
+  "bugs": "https://github.com/mridang/semantic-release-gomod/issues",
+  "dependencies": {
+    "@semantic-release/error": "^4.0.0"
+  },
+  "devDependencies": {
+    "@jest/globals": "^30.0.3",
+    "@mridang/eslint-defaults": "^1.4.0",
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^12.0.0",
+    "@semantic-release/npm": "^13.1.1",
+    "@semantic-release/release-notes-generator": "^14.1.0",
+    "@tsconfig/node22": "^22.0.2",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^22.18.12",
+    "@types/semantic-release__error": "^3.0.3",
+    "eslint": "^9.27.0",
+    "jest": "^30.0.3",
+    "jest-junit": "^16.0.0",
+    "knip": "^5.43.6",
+    "prettier": "^3.1.1",
+    "semantic-release": "^25.0.1",
+    "ts-jest": "^29.4.0",
+    "typescript": "^5.9.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
