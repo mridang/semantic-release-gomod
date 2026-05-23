@@ -417,6 +417,31 @@ describe('prepare()', () => {
       expect.stringContaining('No submodules'),
     );
   });
+
+  it('warns and continues when go mod tidy fails', async () => {
+    writeGoMod(tmpDir, 'github.com/example/repo');
+    const subDir = path.join(tmpDir, 'sub');
+    fs.mkdirSync(subDir, { recursive: true });
+    writeGoMod(subDir, 'github.com/example/repo/sub', [
+      'github.com/example/repo v1.0.0',
+    ]);
+
+    const mockExec = jest.fn().mockImplementation((cmd: unknown) => {
+      if (String(cmd).includes('go mod tidy')) {
+        throw new Error('go: module lookup disabled by GONOSUMCHECK');
+      }
+    });
+    await prepare(
+      {} as GomodPluginConfig,
+      makeCtx('2.0.0'),
+      mockExec as unknown as ExecFn,
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('go mod tidy failed'),
+      expect.any(String),
+      expect.any(String),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -474,10 +499,10 @@ describe('publish()', () => {
       mockExec as unknown as ExecFn,
     );
 
-    const pushCalls = mockExec.mock.calls.filter((c) =>
-      String(c[0]).includes('git push origin'),
+    expect(mockExec).toHaveBeenCalledWith(
+      'git push origin "refs/tags/v1.2.3"',
+      expect.objectContaining({ cwd: tmpDir }),
     );
-    expect(pushCalls.length).toBeGreaterThan(0);
   });
 
   it('does not push tags when pushTags is false', async () => {
@@ -517,5 +542,23 @@ describe('publish()', () => {
       'git push origin "refs/tags/v1.2.3"',
       expect.objectContaining({ cwd: tmpDir }),
     );
+  });
+
+  it('rethrows unexpected tag errors', async () => {
+    writeGoMod(tmpDir, 'github.com/example/repo');
+
+    const mockExec = jest.fn().mockImplementation((cmd: unknown) => {
+      if (String(cmd).startsWith('git tag')) {
+        throw new Error('fatal: cannot lock ref');
+      }
+    });
+
+    await expect(
+      publish(
+        {} as GomodPluginConfig,
+        makeCtx('1.2.3'),
+        mockExec as unknown as ExecFn,
+      ),
+    ).rejects.toThrow(/cannot lock ref/);
   });
 });
