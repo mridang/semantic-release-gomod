@@ -1,7 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
-// @ts-expect-error semantic-release types are not bundled
-import { Context } from 'semantic-release';
+import type {
+  PrepareContext,
+  PublishContext,
+  VerifyConditionsContext,
+} from 'semantic-release';
 import SemanticReleaseError from '@semantic-release/error';
 import { defaultExec, type ExecFn } from './exec.js';
 import { GomodConfig, GomodPluginConfig } from './plugin-config.js';
@@ -28,10 +31,11 @@ import {
  */
 export async function verifyConditions(
   pluginConfig: GomodPluginConfig,
-  context: Context,
+  context: VerifyConditionsContext,
   exec: ExecFn = defaultExec,
 ): Promise<void> {
-  const { logger, cwd } = context;
+  const { logger } = context;
+  const cwd = context.cwd ?? process.cwd();
   const config = new GomodConfig(pluginConfig);
 
   const rootGoMod = path.join(cwd, 'go.mod');
@@ -76,14 +80,14 @@ export async function verifyConditions(
  */
 export async function prepare(
   pluginConfig: GomodPluginConfig,
-  context: Context,
+  context: PrepareContext,
   exec: ExecFn = defaultExec,
 ): Promise<void> {
   const {
     logger,
-    cwd,
     nextRelease: { version },
   } = context;
+  const cwd = context.cwd ?? process.cwd();
   const config = new GomodConfig(pluginConfig);
 
   const rootGoMod = path.join(cwd, 'go.mod');
@@ -134,14 +138,14 @@ export async function prepare(
  */
 export async function publish(
   pluginConfig: GomodPluginConfig,
-  context: Context,
+  context: PublishContext,
   exec: ExecFn = defaultExec,
 ): Promise<void> {
   const {
     logger,
-    cwd,
     nextRelease: { version },
   } = context;
+  const cwd = context.cwd ?? process.cwd();
   const config = new GomodConfig(pluginConfig);
 
   // All go.mod files: submodules + root

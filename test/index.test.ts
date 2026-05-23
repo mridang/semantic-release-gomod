@@ -117,6 +117,19 @@ describe('discoverSubmoduleGoMods()', () => {
     const result = discoverSubmoduleGoMods(tmpDir);
     expect(result).toEqual([]);
   });
+
+  it('supports single-level * wildcard in glob patterns', () => {
+    writeGoMod(tmpDir, 'github.com/example/repo');
+    const aDir = path.join(tmpDir, 'pkg', 'a');
+    const bDir = path.join(tmpDir, 'pkg', 'b');
+    fs.mkdirSync(aDir, { recursive: true });
+    fs.mkdirSync(bDir, { recursive: true });
+    writeGoMod(aDir, 'github.com/example/repo/pkg/a');
+    writeGoMod(bDir, 'github.com/example/repo/pkg/b');
+    const result = discoverSubmoduleGoMods(tmpDir, ['pkg/*/go.mod']);
+    expect(result).toContain(path.join(aDir, 'go.mod'));
+    expect(result).toContain(path.join(bDir, 'go.mod'));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -318,6 +331,20 @@ describe('verifyConditions()', () => {
       expect.stringContaining('single-module mode'),
     );
   });
+
+  it('logs submodule count when submodules are found', async () => {
+    writeGoMod(tmpDir, 'github.com/example/repo');
+    const subDir = path.join(tmpDir, 'sub');
+    fs.mkdirSync(subDir, { recursive: true });
+    writeGoMod(subDir, 'github.com/example/repo/sub');
+    const mockExec = jest.fn();
+    await verifyConditions(
+      {} as GomodPluginConfig,
+      baseCtx(),
+      mockExec as unknown as ExecFn,
+    );
+    expect(logger.log).toHaveBeenCalledWith('Found %d submodule(s).', 1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -416,6 +443,47 @@ describe('prepare()', () => {
     expect(logger.log).toHaveBeenCalledWith(
       expect.stringContaining('No submodules'),
     );
+  });
+
+  it('accepts modules as a plain string (normalised to array)', async () => {
+    writeGoMod(tmpDir, 'github.com/example/repo');
+    const subDir = path.join(tmpDir, 'sub');
+    fs.mkdirSync(subDir, { recursive: true });
+    writeGoMod(subDir, 'github.com/example/repo/sub', [
+      'github.com/example/repo v1.0.0',
+    ]);
+
+    const mockExec = jest.fn();
+    await prepare(
+      { modules: 'sub/go.mod', skipGoModTidy: true } as GomodPluginConfig,
+      makeCtx('3.0.0'),
+      mockExec as unknown as ExecFn,
+    );
+
+    const content = fs.readFileSync(path.join(subDir, 'go.mod'), 'utf8');
+    expect(content).toContain('github.com/example/repo v3.0.0');
+  });
+
+  it('accepts modules as an array of strings', async () => {
+    writeGoMod(tmpDir, 'github.com/example/repo');
+    const subDir = path.join(tmpDir, 'sub');
+    fs.mkdirSync(subDir, { recursive: true });
+    writeGoMod(subDir, 'github.com/example/repo/sub', [
+      'github.com/example/repo v1.0.0',
+    ]);
+
+    const mockExec = jest.fn();
+    await prepare(
+      {
+        modules: ['sub/go.mod'],
+        skipGoModTidy: true,
+      } as GomodPluginConfig,
+      makeCtx('4.0.0'),
+      mockExec as unknown as ExecFn,
+    );
+
+    const content = fs.readFileSync(path.join(subDir, 'go.mod'), 'utf8');
+    expect(content).toContain('github.com/example/repo v4.0.0');
   });
 
   it('warns and continues when go mod tidy fails', async () => {
