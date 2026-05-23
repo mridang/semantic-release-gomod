@@ -5,7 +5,7 @@ import { defaultExec, type ExecFn } from './exec.js';
 /**
  * Minimal logger interface compatible with the semantic-release context logger.
  */
-export interface Logger {
+interface Logger {
   log(message: string, ...args: unknown[]): void;
   warn(message: string, ...args: unknown[]): void;
 }
