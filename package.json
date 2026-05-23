@@ -56,16 +56,16 @@
     "@semantic-release/release-notes-generator": "^14.1.0",
     "@tsconfig/node22": "^22.0.2",
     "@types/jest": "^30.0.0",
-    "@types/node": "^22.18.12",
+    "@types/node": "^25.9.1",
     "@types/semantic-release__error": "^3.0.3",
-    "eslint": "^9.27.0",
+    "eslint": "^10.4.0",
     "jest": "^30.0.3",
-    "jest-junit": "^16.0.0",
-    "knip": "^5.43.6",
+    "jest-junit": "^17.0.0",
+    "knip": "^6.14.2",
     "prettier": "^3.1.1",
     "semantic-release": "^25.0.1",
     "ts-jest": "^29.4.0",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   },
   "publishConfig": {
     "access": "public"
