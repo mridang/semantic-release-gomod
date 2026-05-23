@@ -37,11 +37,7 @@ export interface GomodPluginConfig extends Config {
  * lifecycle hooks stay small and consistent.
  */
 export class GomodConfig {
-  private readonly config: GomodPluginConfig;
-
-  constructor(config: GomodPluginConfig) {
-    this.config = config;
-  }
+  constructor(private readonly config: GomodPluginConfig) {}
 
   /**
    * Returns the user-supplied glob patterns for submodule go.mod files,

@@ -87,12 +87,13 @@ function matchParts(dir: string, parts: readonly string[]): readonly string[] {
   }
 
   if (tail.length === 0) {
-    // Last segment — must be a file
+    // Last segment — must be a file (single statSync avoids TOCTOU)
     const candidate = path.join(dir, head);
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-      return [candidate];
+    try {
+      return fs.statSync(candidate).isFile() ? [candidate] : [];
+    } catch {
+      return [];
     }
-    return [];
   }
 
   if (head === '*') {
@@ -102,10 +103,8 @@ function matchParts(dir: string, parts: readonly string[]): readonly string[] {
       .flatMap((e) => matchParts(path.join(dir, e.name), tail));
   }
 
-  // Literal segment
-  const next = path.join(dir, head);
-  if (!fs.existsSync(next)) return [];
-  return matchParts(next, tail);
+  // Literal segment — safeReadDir handles missing/unreadable paths gracefully
+  return matchParts(path.join(dir, head), tail);
 }
 
 /**

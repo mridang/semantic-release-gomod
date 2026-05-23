@@ -283,6 +283,7 @@ describe('verifyConditions()', () => {
         mockExec as unknown as ExecFn,
       ),
     ).resolves.toBeUndefined();
+    expect(mockExec).toHaveBeenCalledWith('git --version', { stdio: 'pipe' });
   });
 
   it('throws EMISSINGGOMOD when go.mod is absent', async () => {
@@ -377,10 +378,10 @@ describe('prepare()', () => {
       mockExec as unknown as ExecFn,
     );
 
-    const tidyCalls = mockExec.mock.calls.filter((c) =>
-      String(c[0]).includes('go mod tidy'),
-    );
-    expect(tidyCalls.length).toBe(1);
+    expect(mockExec).toHaveBeenCalledWith('go mod tidy', {
+      cwd: subDir,
+      stdio: 'pipe',
+    });
   });
 
   it('skips go mod tidy when skipGoModTidy is true', async () => {
@@ -495,7 +496,7 @@ describe('publish()', () => {
     expect(pushCalls.length).toBe(0);
   });
 
-  it('silently skips tags that already exist', async () => {
+  it('silently skips tags that already exist and still pushes', async () => {
     writeGoMod(tmpDir, 'github.com/example/repo');
 
     const mockExec = jest.fn().mockImplementation((cmd: unknown) => {
@@ -511,5 +512,10 @@ describe('publish()', () => {
         mockExec as unknown as ExecFn,
       ),
     ).resolves.toBeUndefined();
+
+    expect(mockExec).toHaveBeenCalledWith(
+      'git push origin "refs/tags/v1.2.3"',
+      expect.objectContaining({ cwd: tmpDir }),
+    );
   });
 });
