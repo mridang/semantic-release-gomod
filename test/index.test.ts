@@ -191,8 +191,10 @@ describe('publish', () => {
       const { publish: ctx, logger } = stepContext(dir);
       await publish({}, ctx, exec);
       expect(commands(exec)).toEqual([
+        'git rev-parse -q --verify "refs/tags/v1.2.3"',
         'git tag "v1.2.3"',
         'git push origin "refs/tags/v1.2.3"',
+        'git rev-parse -q --verify "refs/tags/pkg/foo/v1.2.3"',
         'git tag "pkg/foo/v1.2.3"',
         'git push origin "refs/tags/pkg/foo/v1.2.3"',
       ]);
@@ -208,22 +210,23 @@ describe('publish', () => {
     await withTmp(files, async (dir) => {
       const exec = mockExec();
       await publish({ pushTags: false }, stepContext(dir).publish, exec);
-      expect(commands(exec)).toEqual([
-        'git tag "v1.2.3"',
-        'git tag "pkg/foo/v1.2.3"',
-      ]);
+      expect(commands(exec).filter((cmd) => cmd.startsWith('git tag'))).toEqual(
+        ['git tag "v1.2.3"', 'git tag "pkg/foo/v1.2.3"'],
+      );
+      expect(commands(exec).some((cmd) => cmd.includes('push'))).toBe(false);
     });
   });
 
   it('skips tags that already exist and still pushes', async () => {
     await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
-      const exec = mockExec((cmd) => {
-        if (cmd.startsWith('git tag')) throw new Error('fatal: already exists');
-      });
+      const exec = mockExec(() => undefined, ['v1.2.3']);
       await expect(
         publish({}, stepContext(dir).publish, exec),
       ).resolves.toBeUndefined();
-      expect(commands(exec)).toContain('git push origin "refs/tags/v1.2.3"');
+      expect(commands(exec)).toEqual([
+        'git rev-parse -q --verify "refs/tags/v1.2.3"',
+        'git push origin "refs/tags/v1.2.3"',
+      ]);
     });
   });
 

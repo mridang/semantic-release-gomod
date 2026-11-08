@@ -312,11 +312,14 @@ describe('deriveTagPrefix', () => {
 });
 
 describe('createAndPushTag', () => {
+  const verify = 'git rev-parse -q --verify "refs/tags/v1.2.3"';
+
   it('creates and pushes the tag', () => {
     const exec = mockExec();
     const logger = mockLogger();
     createAndPushTag('/repo', 'v1.2.3', true, logger, exec);
     expect(exec.mock.calls).toEqual([
+      [verify, { cwd: '/repo', stdio: 'pipe' }],
       ['git tag "v1.2.3"', { cwd: '/repo', stdio: 'pipe' }],
       ['git push origin "refs/tags/v1.2.3"', { cwd: '/repo', stdio: 'pipe' }],
     ]);
@@ -327,32 +330,33 @@ describe('createAndPushTag', () => {
   it('only creates the tag when push is off', () => {
     const exec = mockExec();
     createAndPushTag('/repo', 'v1.2.3', false, mockLogger(), exec);
-    expect(exec.mock.calls.map(([cmd]) => cmd)).toEqual(['git tag "v1.2.3"']);
+    expect(exec.mock.calls.map(([cmd]) => cmd)).toEqual([
+      verify,
+      'git tag "v1.2.3"',
+    ]);
   });
 
-  it('logs and still pushes when the tag already exists', () => {
-    const exec = mockExec((cmd) => {
-      if (cmd.startsWith('git tag')) throw new Error('tag already exists');
-    });
+  it('skips an existing tag, whatever language git speaks, and still pushes', () => {
+    const exec = mockExec(() => undefined, ['v1.2.3']);
     const logger = mockLogger();
     createAndPushTag('/repo', 'v1.2.3', true, logger, exec);
     expect(logger.log).toHaveBeenCalledWith(
       'Tag %s already exists, skipping',
       'v1.2.3',
     );
-    expect(exec).toHaveBeenCalledWith(
+    expect(exec.mock.calls.map(([cmd]) => cmd)).toEqual([
+      verify,
       'git push origin "refs/tags/v1.2.3"',
-      expect.anything(),
-    );
+    ]);
   });
 
-  it('rethrows other tag errors without pushing', () => {
+  it('rethrows tag errors without pushing, even when they mention existing', () => {
     const exec = mockExec((cmd) => {
-      if (cmd.startsWith('git tag')) throw new Error('cannot lock ref');
+      if (cmd.startsWith('git tag')) throw new Error('tag already exists');
     });
     expect(() =>
       createAndPushTag('/repo', 'v1.2.3', true, mockLogger(), exec),
-    ).toThrow('cannot lock ref');
-    expect(exec).toHaveBeenCalledTimes(1);
+    ).toThrow('tag already exists');
+    expect(exec).toHaveBeenCalledTimes(2);
   });
 });

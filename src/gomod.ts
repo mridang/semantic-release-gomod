@@ -2,7 +2,6 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { VerifyConditionsContext } from 'semantic-release';
 import { defaultExec, type ExecFn } from './exec.js';
-import { messageOf } from './utils/error.js';
 
 /**
  * The part of the semantic-release context logger that tagging uses.
@@ -200,9 +199,30 @@ export function deriveTagPrefix(goModPath: string, repoRoot: string): string {
 }
 
 /**
+ * Whether a tag already exists locally. Asks git for the ref instead of
+ * reading the text of its error message, which depends on the locale.
+ *
+ * @param repoRoot Absolute path to the repository root.
+ * @param tag      Full tag string, e.g. `"assert/cert/manager/v1.2.3"`.
+ * @param exec     Command executor (injectable for testing).
+ * @returns True when `refs/tags/<tag>` resolves.
+ */
+function tagExists(repoRoot: string, tag: string, exec: ExecFn): boolean {
+  try {
+    exec(`git rev-parse -q --verify "refs/tags/${tag}"`, {
+      cwd: repoRoot,
+      stdio: 'pipe',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Create a git tag locally and optionally push it to origin.
- * Silently ignores the case where the tag already exists so the
- * plugin can be called idempotently.
+ * Silently skips a tag that already exists so the plugin can be called
+ * idempotently.
  *
  * @param repoRoot Absolute path to the repository root.
  * @param tag      Full tag string, e.g. `"assert/cert/manager/v1.2.3"`.
@@ -217,15 +237,11 @@ export function createAndPushTag(
   logger: Logger,
   exec: ExecFn = defaultExec,
 ): void {
-  try {
+  if (tagExists(repoRoot, tag, exec)) {
+    logger.log('Tag %s already exists, skipping', tag);
+  } else {
     exec(`git tag "${tag}"`, { cwd: repoRoot, stdio: 'pipe' });
     logger.log('Created tag %s', tag);
-  } catch (err: unknown) {
-    if (messageOf(err).includes('already exists')) {
-      logger.log('Tag %s already exists, skipping', tag);
-    } else {
-      throw err;
-    }
   }
 
   if (push) {

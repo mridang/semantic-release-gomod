@@ -20,15 +20,23 @@ export function mockLogger(): {
 }
 
 /**
- * A command executor that records its calls and optionally fails.
+ * A command executor that records its calls and optionally fails. Looking a
+ * tag up with `git rev-parse` succeeds only for the tags that already exist.
  *
- * @param behaviour Called with each command, and may throw to fail it.
+ * @param behaviour Called with each other command, and may throw to fail it.
+ * @param existingTags Tags that already exist in the repository.
  * @returns A mock usable wherever an `ExecFn` is expected.
  */
 export function mockExec(
   behaviour: (cmd: string) => void = () => undefined,
+  existingTags: readonly string[] = [],
 ): jest.Mock<ExecFn> {
-  return jest.fn<ExecFn>((cmd) => behaviour(cmd));
+  return jest.fn<ExecFn>((cmd) => {
+    if (!cmd.startsWith('git rev-parse')) return behaviour(cmd);
+    if (!existingTags.some((tag) => cmd.endsWith(`"refs/tags/${tag}"`))) {
+      throw new Error('fatal: no such tag');
+    }
+  });
 }
 
 /**
