@@ -6,19 +6,7 @@ import type {
 } from 'semantic-release';
 import type { ExecFn } from '../../src/exec.js';
 import type { GomodPluginConfig } from '../../src/plugin-config.js';
-
-/**
- * A logger whose calls can be inspected.
- *
- * @returns Mock functions for each logger method the plugin may use.
- */
-export function mockLogger(): {
-  readonly log: jest.Mock;
-  readonly warn: jest.Mock;
-  readonly error: jest.Mock;
-} {
-  return { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
-}
+import { recordingLogger } from './logger.js';
 
 /**
  * The error a program throws when it exits with a status.
@@ -92,21 +80,21 @@ export function commandsOf(exec: jest.Mock<ExecFn>): readonly string[] {
  *
  * @param cwd The repository directory.
  * @param version The version being released.
- * @returns The context, typed for each step, and its logger.
+ * @returns The context, typed for each step, and the lines logged through it.
  */
 export function stepContext(
   cwd: string,
   version = '1.2.3',
 ): {
-  readonly logger: ReturnType<typeof mockLogger>;
+  readonly lines: string[];
   readonly verify: VerifyConditionsContext;
   readonly prepare: PrepareContext;
   readonly publish: PublishContext;
 } {
-  const logger = mockLogger();
+  const { logger, lines } = recordingLogger();
   const partial: unknown = { logger, cwd, nextRelease: { version } };
   return {
-    logger,
+    lines,
     verify: partial as VerifyConditionsContext,
     prepare: partial as PrepareContext,
     publish: partial as PublishContext,

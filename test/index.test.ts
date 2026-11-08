@@ -64,9 +64,9 @@ describe('verifyConditions', () => {
 
   it('logs that it is in single-module mode when no submodules exist', async () => {
     await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
-      const { verify, logger } = stepContext(dir);
+      const { verify, lines } = stepContext(dir);
       await verifyConditions({}, verify, mockExec());
-      expect(logger.log).toHaveBeenCalledWith(
+      expect(lines).toContain(
         'No submodule go.mod files found — operating in single-module mode.',
       );
     });
@@ -76,9 +76,9 @@ describe('verifyConditions', () => {
     await withTmp(
       { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
       async (dir) => {
-        const { verify, logger } = stepContext(dir);
+        const { verify, lines } = stepContext(dir);
         await verifyConditions({}, verify, mockExec());
-        expect(logger.log).toHaveBeenCalledWith('Found %d submodule(s).', 1);
+        expect(lines).toContain('Found %d submodule(s). 1');
       },
     );
   });
@@ -229,18 +229,14 @@ describe('prepare', () => {
   it('runs go mod tidy in each submodule by default', async () => {
     await withTmp(files, async (dir) => {
       const exec = mockExec();
-      const { prepare: ctx, logger } = stepContext(dir, '2.0.0');
+      const { prepare: ctx, lines } = stepContext(dir, '2.0.0');
       await prepare({}, ctx, exec);
       expect(exec).toHaveBeenCalledWith('go', ['mod', 'tidy'], {
         cwd: join(dir, 'sub'),
         stdio: 'pipe',
       });
-      expect(logger.log).toHaveBeenCalledWith('go mod tidy OK in %s', 'sub');
-      expect(logger.log).toHaveBeenCalledWith(
-        'Prepared %d submodule(s) for v%s.',
-        1,
-        '2.0.0',
-      );
+      expect(lines).toContain('go mod tidy OK in %s sub');
+      expect(lines).toContain('Prepared %d submodule(s) for v%s. 1 2.0.0');
     });
   });
 
@@ -254,10 +250,10 @@ describe('prepare', () => {
 
   it('logs and returns when no submodules exist', async () => {
     await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
-      const { prepare: ctx, logger } = stepContext(dir);
+      const { prepare: ctx, lines } = stepContext(dir);
       await prepare({}, ctx, mockExec());
-      expect(logger.log).toHaveBeenCalledWith('Root module: %s', ROOT);
-      expect(logger.log).toHaveBeenCalledWith('No submodules to update.');
+      expect(lines).toContain(`Root module: %s ${ROOT}`);
+      expect(lines).toContain('No submodules to update.');
     });
   });
 
@@ -283,12 +279,10 @@ describe('prepare', () => {
         if (cmd.startsWith('go '))
           throw new Error('go: module lookup disabled');
       });
-      const { prepare: ctx, logger } = stepContext(dir, '2.0.0');
+      const { prepare: ctx, lines } = stepContext(dir, '2.0.0');
       await expect(prepare({}, ctx, exec)).resolves.toBeUndefined();
-      expect(logger.warn).toHaveBeenCalledWith(
-        'go mod tidy failed in %s: %s',
-        'sub',
-        'go: module lookup disabled',
+      expect(lines).toContain(
+        'go mod tidy failed in %s: %s sub go: module lookup disabled',
       );
     });
   });
@@ -299,13 +293,12 @@ describe('prepare', () => {
         if (cmd.startsWith('go '))
           throw new Error('go: https://user:s3cret@proxy.example.com/x failed');
       });
-      const { prepare: ctx, logger } = stepContext(dir, '2.0.0');
+      const { prepare: ctx, lines } = stepContext(dir, '2.0.0');
       await prepare({}, ctx, exec);
-      expect(logger.warn).toHaveBeenCalledWith(
-        'go mod tidy failed in %s: %s',
-        'sub',
-        'go: https://***@proxy.example.com/x failed',
+      expect(lines).toContain(
+        'go mod tidy failed in %s: %s sub go: https://***@proxy.example.com/x failed',
       );
+      expect(lines.join('\n')).not.toContain('s3cret');
     });
   });
 
@@ -438,7 +431,7 @@ describe('publish with a mocked executor', () => {
   it('validates every tag first, then creates and pushes each', async () => {
     await withTmp(files, async (dir) => {
       const exec = mockExec();
-      const { publish: ctx, logger } = stepContext(dir);
+      const { publish: ctx, lines } = stepContext(dir);
       await publish({}, ctx, exec);
       expect(commands(exec)).toEqual([
         ...checks,
@@ -447,11 +440,7 @@ describe('publish with a mocked executor', () => {
         'git tag -- pkg/foo/v1.2.3',
         'git push origin refs/tags/pkg/foo/v1.2.3',
       ]);
-      expect(logger.log).toHaveBeenCalledWith(
-        'Tagged %d module(s) at v%s.',
-        2,
-        '1.2.3',
-      );
+      expect(lines).toContain('Tagged %d module(s) at v%s. 2 1.2.3');
     });
   });
 

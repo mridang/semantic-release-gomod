@@ -11,14 +11,9 @@ import {
   readModulePath,
   updateGoModRequires,
 } from '../src/gomod.js';
-import {
-  commandsOf,
-  exitedWith,
-  HEAD,
-  mockExec,
-  mockLogger,
-} from './utils/context.js';
+import { commandsOf, exitedWith, HEAD, mockExec } from './utils/context.js';
 import { goMod } from './utils/go-mod.js';
+import { recordingLogger } from './utils/logger.js';
 import { withTmp } from './utils/tmpdir.js';
 
 /**
@@ -31,7 +26,8 @@ import { withTmp } from './utils/tmpdir.js';
 const discover = (
   root: string,
   patterns?: readonly string[],
-): readonly string[] => discoverSubmoduleGoMods(root, patterns, mockLogger());
+): readonly string[] =>
+  discoverSubmoduleGoMods(root, patterns, recordingLogger().logger);
 
 describe('discoverSubmoduleGoMods', () => {
   it('returns an empty array when only the root go.mod exists', async () => {
@@ -148,16 +144,12 @@ describe('discoverSubmoduleGoMods', () => {
         '.git/x': '',
       },
       async (dir) => {
-        const logger = mockLogger();
+        const { logger, lines } = recordingLogger();
         discoverSubmoduleGoMods(dir, undefined, logger);
-        const skipped = logger.log.mock.calls.map(([, path]) => path);
-        expect(skipped).toEqual(
-          expect.arrayContaining([
-            join(dir, 'vendor'),
-            join(dir, 'sub/node_modules'),
-          ]),
-        );
-        expect(skipped).not.toContain(join(dir, '.git'));
+        const text = lines.join('\n');
+        expect(text).toContain(join(dir, 'vendor'));
+        expect(text).toContain(join(dir, 'sub/node_modules'));
+        expect(text).not.toContain(join(dir, '.git'));
       },
     );
   });
@@ -172,17 +164,14 @@ describe('discoverSubmoduleGoMods', () => {
           'vendor/a/go.mod': goMod('x'),
         },
         async (dir) => {
-          const logger = mockLogger();
+          const { logger, lines } = recordingLogger();
           discoverSubmoduleGoMods(dir, [pattern], logger);
           // The directories are reported when the walk reaches them, so
           // their contents are never listed.
-          expect(logger.log.mock.calls.map(([, skipped]) => skipped)).toEqual(
-            expect.arrayContaining([
-              join(dir, 'node_modules'),
-              join(dir, 'vendor'),
-            ]),
-          );
-          expect(logger.log.mock.calls.length).toBe(2);
+          const skipped = lines.filter((l) => l.startsWith('Not searching'));
+          expect(skipped).toHaveLength(2);
+          expect(lines.join('\n')).toContain(join(dir, 'node_modules'));
+          expect(lines.join('\n')).toContain(join(dir, 'vendor'));
         },
       );
     },
@@ -195,17 +184,15 @@ describe('discoverSubmoduleGoMods', () => {
         'node_modules/a/go.mod': goMod('x'),
       },
       async (dir) => {
-        const logger = mockLogger();
+        const { logger, lines } = recordingLogger();
         discoverSubmoduleGoMods(
           dir,
           ['**/go.mod', '*/go.mod', '**/**/go.mod'],
           logger,
         );
-        expect(logger.log).toHaveBeenCalledTimes(1);
-        expect(logger.log).toHaveBeenCalledWith(
-          expect.stringContaining('Not searching'),
-          join(dir, 'node_modules'),
-        );
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain(`Not searching %s for modules`);
+        expect(lines[0]).toContain(join(dir, 'node_modules'));
       },
     );
   });
@@ -214,15 +201,13 @@ describe('discoverSubmoduleGoMods', () => {
     await withTmp(
       { 'sub/go.mod': goMod('github.com/example/repo/sub') },
       async (dir) => {
-        const logger = mockLogger();
+        const { logger, lines } = recordingLogger();
         expect(
           discoverSubmoduleGoMods(dir, ['sub/go.mod', 'svc/*/go.mod'], logger),
         ).toEqual([join(dir, 'sub/go.mod')]);
-        expect(logger.warn).toHaveBeenCalledTimes(1);
-        expect(logger.warn).toHaveBeenCalledWith(
-          'Pattern "%s" in `modules` matched no go.mod files.',
-          'svc/*/go.mod',
-        );
+        expect(lines).toEqual([
+          'Pattern "%s" in `modules` matched no go.mod files. svc/*/go.mod',
+        ]);
       },
     );
   });
@@ -403,9 +388,9 @@ describe('links and the repository boundary', () => {
   it('warns about a pattern that only reached a link', async () => {
     await withTmp({ 'a/go.mod': goMod('x') }, async (dir) => {
       await symlink(join(dir, 'a'), join(dir, 'link'));
-      const logger = mockLogger();
+      const { logger, lines } = recordingLogger();
       discoverSubmoduleGoMods(dir, ['link/go.mod'], logger);
-      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(lines).toHaveLength(1);
     });
   });
 });
@@ -981,14 +966,13 @@ describe('createAndPushTag', () => {
 
   it('creates and pushes the tag', () => {
     const exec = mockExec();
-    const logger = mockLogger();
+    const { logger, lines } = recordingLogger();
     createAndPushTag('/repo', missing, true, logger, exec);
     expect(exec.mock.calls).toEqual([
       ['git', ['tag', '--', 'v1.2.3'], options],
       ['git', ['push', 'origin', 'refs/tags/v1.2.3'], options],
     ]);
-    expect(logger.log).toHaveBeenCalledWith('Created tag %s', 'v1.2.3');
-    expect(logger.log).toHaveBeenCalledWith('Pushed tag %s', 'v1.2.3');
+    expect(lines).toEqual(['Created tag %s v1.2.3', 'Pushed tag %s v1.2.3']);
   });
 
   it.each([
@@ -998,7 +982,13 @@ describe('createAndPushTag', () => {
     ['spaces', 'a b/v1.0.0'],
   ])('passes a tag with %s as one argument', (_name, tag) => {
     const exec = mockExec();
-    createAndPushTag('/repo', { tag, exists: false }, true, mockLogger(), exec);
+    createAndPushTag(
+      '/repo',
+      { tag, exists: false },
+      true,
+      recordingLogger().logger,
+      exec,
+    );
     expect(exec.mock.calls.map(([file, args]) => [file, ...args])).toEqual([
       ['git', 'tag', '--', tag],
       ['git', 'push', 'origin', `refs/tags/${tag}`],
@@ -1007,13 +997,13 @@ describe('createAndPushTag', () => {
 
   it('only creates the tag when push is off', () => {
     const exec = mockExec();
-    createAndPushTag('/repo', missing, false, mockLogger(), exec);
+    createAndPushTag('/repo', missing, false, recordingLogger().logger, exec);
     expect(commandsOf(exec)).toEqual(['git tag -- v1.2.3']);
   });
 
   it('skips a tag that exists at HEAD and still pushes', () => {
     const exec = mockExec();
-    const logger = mockLogger();
+    const { logger, lines } = recordingLogger();
     createAndPushTag(
       '/repo',
       { tag: 'v1.2.3', exists: true },
@@ -1021,10 +1011,10 @@ describe('createAndPushTag', () => {
       logger,
       exec,
     );
-    expect(logger.log).toHaveBeenCalledWith(
-      'Tag %s already exists, skipping',
-      'v1.2.3',
-    );
+    expect(lines).toEqual([
+      'Tag %s already exists, skipping v1.2.3',
+      'Pushed tag %s v1.2.3',
+    ]);
     expect(commandsOf(exec)).toEqual(['git push origin refs/tags/v1.2.3']);
   });
 
@@ -1033,7 +1023,7 @@ describe('createAndPushTag', () => {
       if (cmd.startsWith('git tag')) throw new Error('fatal: cannot lock ref');
     });
     expect(() =>
-      createAndPushTag('/repo', missing, true, mockLogger(), exec),
+      createAndPushTag('/repo', missing, true, recordingLogger().logger, exec),
     ).toThrow('cannot lock ref');
     expect(exec).toHaveBeenCalledTimes(1);
   });
