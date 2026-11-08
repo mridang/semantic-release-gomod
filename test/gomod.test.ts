@@ -6,6 +6,7 @@ import {
   createAndPushTag,
   planTags,
   deriveTagPrefix,
+  isInside,
   discoverSubmoduleGoMods,
   readModulePath,
   updateGoModRequires,
@@ -347,6 +348,68 @@ describe('discoverSubmoduleGoMods', () => {
         expect(discover(dir, [])).toEqual([join(dir, 'sub/go.mod')]);
       },
     );
+  });
+});
+
+describe('links and the repository boundary', () => {
+  it('does not follow a symlinked directory named literally in a pattern', async () => {
+    await withTmp(
+      { 'a/go.mod': goMod('github.com/example/repo/a'), 'other/keep': '' },
+      async (dir) => {
+        await symlink(join(dir, 'a'), join(dir, 'dirlink'));
+        expect(discover(dir, ['a/go.mod', 'dirlink/go.mod'])).toEqual([
+          join(dir, 'a/go.mod'),
+        ]);
+      },
+    );
+  });
+
+  it('does not follow a symlinked directory that leaves the repository', async () => {
+    await withTmp(
+      { 'ext/go.mod': goMod('github.com/example/ext') },
+      async (outside) => {
+        await withTmp({ keep: '' }, async (dir) => {
+          await symlink(join(outside, 'ext'), join(dir, 'ext'));
+          expect(discover(dir, ['ext/go.mod'])).toEqual([]);
+          expect(discover(dir, ['*/go.mod'])).toEqual([]);
+          expect(discover(dir)).toEqual([]);
+        });
+      },
+    );
+  });
+
+  it('warns about a pattern that only reached a link', async () => {
+    await withTmp({ 'a/go.mod': goMod('x') }, async (dir) => {
+      await symlink(join(dir, 'a'), join(dir, 'link'));
+      const logger = mockLogger();
+      discoverSubmoduleGoMods(dir, ['link/go.mod'], logger);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe('isInside', () => {
+  it.each([
+    ['a file below the root', '/repo', '/repo/a/go.mod', true],
+    ['a sibling directory', '/repo', '/repo-other/go.mod', false],
+    ['the parent', '/repo', '/go.mod', false],
+    ['the root itself', '/repo', '/repo', false],
+  ])('on posix: %s', (_name, root, file, expected) => {
+    expect(isInside(root, file)).toBe(expected);
+  });
+
+  it.each([
+    ['a file below the root', 'C:\\repo', 'C:\\repo\\a\\go.mod', true],
+    [
+      'a backslash path that climbs out',
+      'C:\\repo',
+      'C:\\repo\\..\\x\\go.mod',
+      false,
+    ],
+    ['another drive', 'C:\\repo', 'D:\\repo\\go.mod', false],
+    ['a differently cased path', 'C:\\Repo', 'c:\\repo\\a\\go.mod', true],
+  ])('on win32: %s', (_name, root, file, expected) => {
+    expect(isInside(root, file, path.win32)).toBe(expected);
   });
 });
 

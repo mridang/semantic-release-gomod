@@ -77,6 +77,8 @@ describe('resolveConfig', () => {
     ['a character class', 'svc-[ab]/go.mod'],
     ['a double star inside a name', 'a**/go.mod'],
     ['a path that leaves the repository', '../other/go.mod'],
+    ['a backslash path that leaves the repository', '..\\\\other\\\\go.mod'],
+    ['a backslash separator', 'a\\\\b\\\\go.mod'],
     ['a path that climbs out in the middle', 'a/../../go.mod'],
   ])('rejects %s', (_name, pattern) => {
     expect(() => resolveConfig(rawConfig({ modules: [pattern] }))).toThrow(

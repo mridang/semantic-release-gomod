@@ -71,7 +71,8 @@ function searchableSubdirs(dir: string, logger: Logger): readonly string[] {
  * Without patterns the tree is walked, skipping `.git`, `vendor` and
  * `node_modules`. Patterns support literal names and whole-segment `*` and
  * `**` wildcards, which skip the same directories; a literal path is
- * honoured even inside them. Symlinked go.mod files are never matched. A
+ * honoured even inside them. Links are never followed or matched, neither a symlinked go.mod nor a
+ * symlinked directory, and a match outside the repository is dropped. A
  * pattern that matches nothing is reported with a warning.
  *
  * @param root         Absolute path to the repository root.
@@ -85,7 +86,8 @@ export function discoverSubmoduleGoMods(
   logger: Logger,
 ): readonly string[] {
   const rootGoMod = path.join(root, 'go.mod');
-  const isSubmodule = (file: string): boolean => file !== rootGoMod;
+  const isSubmodule = (file: string): boolean =>
+    file !== rootGoMod && isInside(root, file);
   if (!globPatterns || globPatterns.length === 0) {
     return walkForGoMods(root, logger).filter(isSubmodule).toSorted();
   }
@@ -123,6 +125,43 @@ function walkForGoMods(dir: string, logger: Logger): readonly string[] {
       walkForGoMods(sub, logger),
     ),
   ];
+}
+
+/**
+ * Whether a path is a directory itself, not a link to one.
+ *
+ * @param target Absolute path to check.
+ * @returns True for a real directory.
+ */
+function isRealDirectory(target: string): boolean {
+  try {
+    return fs.lstatSync(target).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a file lies inside the repository, judged on the resolved
+ * relative path so `..` and other drives are caught whatever the separator.
+ *
+ * @param root    Absolute path to the repository root.
+ * @param file    Absolute path to a file.
+ * @param pathApi Path implementation (injectable to test Windows paths).
+ * @returns True when the file is below the root.
+ */
+export function isInside(
+  root: string,
+  file: string,
+  pathApi: Pick<typeof path, 'relative' | 'sep' | 'isAbsolute'> = path,
+): boolean {
+  const relative = pathApi.relative(root, file);
+  return (
+    relative !== '' &&
+    relative !== '..' &&
+    !relative.startsWith(`..${pathApi.sep}`) &&
+    !pathApi.isAbsolute(relative)
+  );
 }
 
 /**
@@ -173,8 +212,9 @@ function matchParts(
     );
   }
 
-  // Literal segment: a missing or unreadable path simply matches nothing.
-  return matchParts(path.join(dir, head), tail, logger);
+  // Literal segment: a missing path, or a link, matches nothing.
+  const next = path.join(dir, head);
+  return isRealDirectory(next) ? matchParts(next, tail, logger) : [];
 }
 
 /**

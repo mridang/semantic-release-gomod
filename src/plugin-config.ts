@@ -133,7 +133,7 @@ function isSupportedPattern(pattern: string): boolean {
     .every(
       (segment) =>
         segment !== '..' &&
-        (segment === '*' || segment === '**' || !/[*?[\]{}]/.test(segment)),
+        (segment === '*' || segment === '**' || !/[*?[\]{}\\]/.test(segment)),
     );
 }
 
@@ -150,7 +150,7 @@ function checkPatterns(patterns: readonly string[]): readonly string[] {
     throw new SemanticReleaseError(
       `Option 'modules' has unsupported glob pattern(s): ${unsupported.join(', ')}.`,
       'EINVALIDMODULES',
-      'Only literal names and whole-segment `*` and `**` wildcards are supported (for example "assert/**/go.mod" or "services/*/go.mod"), and a pattern must not use `..` to leave the repository. `?`, `[...]`, `{a,b}` and partial wildcards such as "svc-*" are not supported.',
+      'Only literal names and whole-segment `*` and `**` wildcards are supported (for example "assert/**/go.mod" or "services/*/go.mod"), and a pattern must not use `..` to leave the repository. `?`, `[...]`, `{a,b}`, backslashes and partial wildcards such as "svc-*" are not supported.',
     );
   }
   return patterns;

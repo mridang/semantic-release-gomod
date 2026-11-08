@@ -105,7 +105,7 @@ All options are case-sensitive and lowercased in the JSON configuration.
   logged. A go.mod below a dot-directory could never be released, because
   neither a Go module path nor a git ref may have a component starting with a
   dot. Name a `go.mod` literally, such as `vendor/x/go.mod`, to include one in
-  a skipped directory. Symlinked `go.mod` files are ignored. Go also ignores
+  a skipped directory. Symlinks, to files or to directories, are never followed, and a match outside the repository is dropped. Go also ignores
   directories named `testdata` or starting with `_`; this plugin does not,
   so list the modules explicitly with `modules` if you have fixture modules
   there.
