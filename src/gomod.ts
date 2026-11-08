@@ -14,6 +14,17 @@ type Logger = Pick<VerifyConditionsContext['logger'], 'log'>;
 const IGNORED_DIRS: readonly string[] = ['vendor', 'node_modules'];
 
 /**
+ * Whether a directory name is skipped when searching for modules: the
+ * ignored directories above, and dot-directories such as `.git`.
+ *
+ * @param name A directory name.
+ * @returns True when the directory is not searched.
+ */
+function isIgnoredDir(name: string): boolean {
+  return IGNORED_DIRS.includes(name) || name.startsWith('.');
+}
+
+/**
  * Read a directory, returning an empty array on any I/O error.
  *
  * @param dir Absolute path of the directory.
@@ -58,23 +69,20 @@ export function discoverSubmoduleGoMods(
 }
 
 /**
- * Whether a file is inside a `vendor` or `node_modules` directory below the
- * root. Wildcard patterns skip such files, like auto-discovery does.
+ * Whether a file is inside a `vendor`, `node_modules` or dot-directory below
+ * the root. Wildcard patterns skip such files, like auto-discovery does.
  *
  * @param root Absolute path to the repository root.
  * @param file Absolute path to a file.
  * @returns True when a directory on the way from the root is ignored.
  */
 function inIgnoredDir(root: string, file: string): boolean {
-  return path
-    .relative(root, file)
-    .split(path.sep)
-    .some((segment) => IGNORED_DIRS.includes(segment));
+  return path.relative(root, file).split(path.sep).some(isIgnoredDir);
 }
 
 /**
  * Recursively walk `dir` and return absolute paths of all go.mod files,
- * skipping `vendor` and `node_modules`. Only regular files count, so a
+ * skipping `vendor`, `node_modules` and dot-directories. Only regular files count, so a
  * symlink named go.mod is ignored.
  *
  * @param dir Absolute path of the directory to walk.
@@ -82,7 +90,7 @@ function inIgnoredDir(root: string, file: string): boolean {
  */
 function walkForGoMods(dir: string): readonly string[] {
   return safeReadDir(dir).flatMap((entry) => {
-    if (IGNORED_DIRS.includes(entry.name)) return [];
+    if (isIgnoredDir(entry.name)) return [];
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) return walkForGoMods(full);
     if (entry.isFile() && entry.name === 'go.mod') return [full];

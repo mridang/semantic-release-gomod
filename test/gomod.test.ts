@@ -78,6 +78,37 @@ describe('discoverSubmoduleGoMods', () => {
     },
   );
 
+  it.each([[undefined], [['**/go.mod']]])(
+    'skips .git and other dot-directories (patterns %j)',
+    async (patterns) => {
+      await withTmp(
+        {
+          'go.mod': goMod('github.com/example/repo'),
+          'sub/go.mod': goMod('github.com/example/repo/sub'),
+          '.git/modules/x/go.mod': goMod('github.com/example/git'),
+          '.cache/y/go.mod': goMod('github.com/example/cache'),
+          'sub/.hidden/go.mod': goMod('github.com/example/hidden'),
+        },
+        async (dir) => {
+          expect(discoverSubmoduleGoMods(dir, patterns)).toEqual([
+            join(dir, 'sub/go.mod'),
+          ]);
+        },
+      );
+    },
+  );
+
+  it('honours a literal path into a dot-directory', async () => {
+    await withTmp(
+      { '.mods/x/go.mod': goMod('github.com/example/x') },
+      async (dir) => {
+        expect(discoverSubmoduleGoMods(dir, ['.mods/x/go.mod'])).toEqual([
+          join(dir, '.mods/x/go.mod'),
+        ]);
+      },
+    );
+  });
+
   it('honours a literal path into vendor or node_modules', async () => {
     await withTmp(
       {
