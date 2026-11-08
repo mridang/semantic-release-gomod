@@ -168,7 +168,9 @@ export function readModulePath(goModPath: string): string {
   const declared = content
     .split('\n')
     .map((line) =>
-      /^\uFEFF?module\s+(\S+)/.exec(line)?.[1]?.replace(/^(["`])(.*)\1$/, '$2'),
+      /^\uFEFF?module\s+(\S+)/
+        .exec(line)?.[1]
+        ?.replace(/^(["`])(.*)\1$/, '$2'),
     )
     .find((name) => name !== undefined);
   if (declared === undefined) {
@@ -198,7 +200,9 @@ export function updateGoModRequires(
   const escaped = rootModule.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // The path must be the root module or one of its sub-paths, so `repo` does
   // not match `repository` or `repo-x`.
-  const requirePath = `${escaped}(?:/\\S*)?`;
+  // A first sub-path segment such as `/v2` is a different module (a new
+  // major version), so it is not pinned to this one's release.
+  const requirePath = `${escaped}(?:/(?!v[0-9]+(?:/|[ \\t]))\\S*)?`;
   const version = `([ \\t]+)v[0-9]\\S*`;
   const inBlock = new RegExp(`^([ \\t]*${requirePath})${version}`, 'gm');
   const single = new RegExp(`^(require[ \\t]+${requirePath})${version}`, 'gm');

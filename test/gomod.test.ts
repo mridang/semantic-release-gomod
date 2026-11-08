@@ -421,6 +421,22 @@ describe('updateGoModRequires', () => {
     );
   });
 
+  it.each([
+    ['a major-version module', 'github.com/example/repo/v2 v2.3.0'],
+    ['a major-version sub-package', 'github.com/example/repo/v10/sub v10.0.1'],
+  ])(
+    'does not rewrite %s, which is a different module',
+    async (_name, line) => {
+      expect(await update([line])).toContain(line);
+    },
+  );
+
+  it('still pins a sub-path that merely starts with v', async () => {
+    expect(await update(['github.com/example/repo/vendor-x v1.0.0'])).toContain(
+      'github.com/example/repo/vendor-x v2.0.0',
+    );
+  });
+
   it('pins a single-line require', async () => {
     await withTmp(
       {
