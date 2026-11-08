@@ -57,6 +57,42 @@ describe('discoverSubmoduleGoMods', () => {
     );
   });
 
+  it.each([['**/go.mod'], ['*/go.mod'], ['go.mod'], ['vendor/*/go.mod']])(
+    'applies the same exclusions to the glob %s as to auto-discovery',
+    async (pattern) => {
+      await withTmp(
+        {
+          'go.mod': goMod('github.com/example/repo'),
+          'sub/go.mod': goMod('github.com/example/repo/sub'),
+          'vendor/p/go.mod': goMod('github.com/example/vendored'),
+          'node_modules/p/go.mod': goMod('github.com/example/npm'),
+        },
+        async (dir) => {
+          const found = discoverSubmoduleGoMods(dir, [pattern]);
+          expect(found).not.toContain(join(dir, 'go.mod'));
+          expect(found.filter((f) => /vendor|node_modules/.test(f))).toEqual(
+            [],
+          );
+        },
+      );
+    },
+  );
+
+  it('finds only the submodule for **/go.mod', async () => {
+    await withTmp(
+      {
+        'go.mod': goMod('github.com/example/repo'),
+        'sub/go.mod': goMod('github.com/example/repo/sub'),
+        'vendor/p/go.mod': goMod('github.com/example/vendored'),
+      },
+      async (dir) => {
+        expect(discoverSubmoduleGoMods(dir, ['**/go.mod'])).toEqual([
+          join(dir, 'sub/go.mod'),
+        ]);
+      },
+    );
+  });
+
   it('lists a file matched by several patterns once', async () => {
     await withTmp(
       { 'pkg/a/go.mod': goMod('github.com/example/repo/pkg/a') },

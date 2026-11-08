@@ -10,6 +10,11 @@ import { messageOf } from './utils/error.js';
 type Logger = Pick<VerifyConditionsContext['logger'], 'log'>;
 
 /**
+ * Directories that never contain modules the plugin manages.
+ */
+const IGNORED_DIRS: readonly string[] = ['vendor', 'node_modules'];
+
+/**
  * Read a directory, returning an empty array on any I/O error.
  */
 function safeReadDir(dir: string): readonly fs.Dirent[] {
@@ -35,17 +40,32 @@ export function discoverSubmoduleGoMods(
   root: string,
   globPatterns?: readonly string[],
 ): readonly string[] {
-  if (globPatterns && globPatterns.length > 0) {
-    const results = globPatterns.flatMap((pattern) =>
-      expandGlob(root, pattern),
-    );
-    return [...new Set(results)].toSorted();
-  }
-
-  // Auto-discover: walk the tree
-  return walkForGoMods(root)
-    .filter((f) => f !== path.join(root, 'go.mod'))
+  const candidates =
+    globPatterns && globPatterns.length > 0
+      ? globPatterns.flatMap((pattern) => expandGlob(root, pattern))
+      : walkForGoMods(root);
+  return [...new Set(candidates)]
+    .filter((file) => isSubmoduleGoMod(root, file))
     .toSorted();
+}
+
+/**
+ * Whether a go.mod file is a submodule the plugin should handle: not the
+ * root go.mod, and not inside a `vendor` or `node_modules` directory. Both
+ * auto-discovery and glob patterns go through this one check.
+ *
+ * @param root Absolute path to the repository root.
+ * @param goModPath Absolute path to a go.mod file.
+ * @returns True for a submodule go.mod.
+ */
+function isSubmoduleGoMod(root: string, goModPath: string): boolean {
+  return (
+    goModPath !== path.join(root, 'go.mod') &&
+    !path
+      .relative(root, goModPath)
+      .split(path.sep)
+      .some((segment) => IGNORED_DIRS.includes(segment))
+  );
 }
 
 /**
@@ -53,9 +73,9 @@ export function discoverSubmoduleGoMods(
  */
 function walkForGoMods(dir: string): readonly string[] {
   return safeReadDir(dir).flatMap((entry) => {
-    if (entry.name === 'vendor' || entry.name === 'node_modules') return [];
+    if (IGNORED_DIRS.includes(entry.name)) return [];
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) return [...walkForGoMods(full)];
+    if (entry.isDirectory()) return walkForGoMods(full);
     if (entry.isFile() && entry.name === 'go.mod') return [full];
     return [];
   });
