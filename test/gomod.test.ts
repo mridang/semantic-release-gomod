@@ -78,6 +78,28 @@ describe('discoverSubmoduleGoMods', () => {
     },
   );
 
+  it('honours a literal path into vendor or node_modules', async () => {
+    await withTmp(
+      {
+        'go.mod': goMod('github.com/example/repo'),
+        'vendor/x/go.mod': goMod('github.com/example/x'),
+        'node_modules/y/go.mod': goMod('github.com/example/y'),
+      },
+      async (dir) => {
+        expect(
+          discoverSubmoduleGoMods(dir, [
+            'vendor/x/go.mod',
+            'node_modules/y/go.mod',
+            'go.mod',
+          ]),
+        ).toEqual([
+          join(dir, 'node_modules/y/go.mod'),
+          join(dir, 'vendor/x/go.mod'),
+        ]);
+      },
+    );
+  });
+
   it('finds only the submodule for **/go.mod', async () => {
     await withTmp(
       {

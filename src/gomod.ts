@@ -42,32 +42,34 @@ export function discoverSubmoduleGoMods(
   root: string,
   globPatterns?: readonly string[],
 ): readonly string[] {
+  const rootGoMod = path.join(root, 'go.mod');
   const candidates =
     globPatterns && globPatterns.length > 0
-      ? globPatterns.flatMap((pattern) => expandGlob(root, pattern))
-      : walkForGoMods(root);
-  return [...new Set(candidates)]
-    .filter((file) => isSubmoduleGoMod(root, file))
-    .toSorted();
+      ? globPatterns.flatMap((pattern) =>
+          expandGlob(root, pattern).filter(
+            (file) =>
+              file !== rootGoMod &&
+              // A literal path was asked for by name, so it is honoured.
+              (!pattern.includes('*') || !inIgnoredDir(root, file)),
+          ),
+        )
+      : walkForGoMods(root).filter((file) => file !== rootGoMod);
+  return [...new Set(candidates)].toSorted();
 }
 
 /**
- * Whether a go.mod file is a submodule the plugin should handle: not the
- * root go.mod, and not inside a `vendor` or `node_modules` directory. Both
- * auto-discovery and glob patterns go through this one check.
+ * Whether a file is inside a `vendor` or `node_modules` directory below the
+ * root. Wildcard patterns skip such files, like auto-discovery does.
  *
  * @param root Absolute path to the repository root.
- * @param goModPath Absolute path to a go.mod file.
- * @returns True for a submodule go.mod.
+ * @param file Absolute path to a file.
+ * @returns True when a directory on the way from the root is ignored.
  */
-function isSubmoduleGoMod(root: string, goModPath: string): boolean {
-  return (
-    goModPath !== path.join(root, 'go.mod') &&
-    !path
-      .relative(root, goModPath)
-      .split(path.sep)
-      .some((segment) => IGNORED_DIRS.includes(segment))
-  );
+function inIgnoredDir(root: string, file: string): boolean {
+  return path
+    .relative(root, file)
+    .split(path.sep)
+    .some((segment) => IGNORED_DIRS.includes(segment));
 }
 
 /**
