@@ -851,9 +851,10 @@ describe('planTags', () => {
         message: expect.stringContaining('bad name/v1.0.0'),
       }),
     );
-    expect(commandsOf(exec).some((cmd) => cmd.includes('--verify'))).toBe(
-      false,
-    );
+    expect(commandsOf(exec)).toEqual([
+      'git check-ref-format refs/tags/v1.0.0',
+      'git check-ref-format refs/tags/bad name/v1.0.0',
+    ]);
   });
 
   it('refuses a tag starting with a dash without asking git', () => {

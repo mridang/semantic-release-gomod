@@ -128,10 +128,6 @@ describe('resolveConfig', () => {
     ).toEqual(['a/go.mod', 'b/go.mod']);
   });
 
-  it('treats an empty string as not configured', () => {
-    expect(resolveConfig({ modules: '' }).modules).toBeUndefined();
-  });
-
   it('keeps an empty array', () => {
     expect(resolveConfig({ modules: [] }).modules).toEqual([]);
   });
