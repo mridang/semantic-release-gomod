@@ -1,11 +1,6 @@
 import { execFileSync, type ExecFileSyncOptions } from 'node:child_process';
-import {
-  codeOf,
-  messageOf,
-  redactCredentials,
-  signalOf,
-  statusOf,
-} from './utils/error.js';
+import { codeOf, messageOf, signalOf, statusOf } from './utils/error.js';
+import { redactCredentials } from './utils/redact.js';
 
 /**
  * A function that runs a program synchronously, without a shell. The program

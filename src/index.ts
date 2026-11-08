@@ -16,7 +16,8 @@ import {
   readModulePath,
   updateGoModRequires,
 } from './gomod.js';
-import { messageOf, redactCredentials } from './utils/error.js';
+import { messageOf } from './utils/error.js';
+import { redactCredentials } from './utils/redact.js';
 
 /**
  * Verify that all preconditions for the plugin are met:
