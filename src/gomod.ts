@@ -328,6 +328,53 @@ function tagCommit(
 }
 
 /**
+ * The tag of every module for a release: the module directory relative to
+ * the repository root, then `/v<version>`; the root module's tag is just
+ * `v<version>`.
+ *
+ * @param repoRoot   Absolute path to the repository root.
+ * @param submodules Absolute paths of the submodule go.mod files.
+ * @param version    The version without a leading `v`.
+ * @returns The root tag first, then one tag per submodule.
+ */
+export function tagNames(
+  repoRoot: string,
+  submodules: readonly string[],
+  version: string,
+): readonly string[] {
+  return [path.join(repoRoot, 'go.mod'), ...submodules].map((goModPath) => {
+    const prefix = deriveTagPrefix(goModPath, repoRoot);
+    return prefix ? `${prefix}/v${version}` : `v${version}`;
+  });
+}
+
+/**
+ * Refuse tag names git would reject, so a bad directory name stops the
+ * release before anything is changed. Run it as early as the lifecycle
+ * allows: once semantic-release has pushed the release commit and the root
+ * tag, a later failure leaves a half published release.
+ *
+ * @param repoRoot Absolute path to the repository root.
+ * @param tags     Every full tag the release will create.
+ * @param exec     Command executor (injectable for testing).
+ * @throws SemanticReleaseError `EINVALIDTAG` listing every refused tag.
+ */
+export function checkTagNames(
+  repoRoot: string,
+  tags: readonly string[],
+  exec: ExecFn,
+): void {
+  const invalid = tags.filter((tag) => !isValidTagName(repoRoot, tag, exec));
+  if (invalid.length > 0) {
+    throw new SemanticReleaseError(
+      `Cannot create tag(s) git rejects: ${invalid.join(', ')}.`,
+      'EINVALIDTAG',
+      'A tag is the module directory plus the version, so rename the directory. Git refuses a tag with a space, `~`, `^`, `:`, `?`, `*`, `[`, `\\`, `..` or `@{`, a component that starts with `.` or ends with `.lock`, a trailing `.` or `/`, and a name starting with `-`. The `modules` option only lists modules to include (there is no exclusion syntax), so to leave a directory out, list the other modules explicitly.',
+    );
+  }
+}
+
+/**
  * Check every tag before any of them is created or pushed, so a bad one
  * cannot leave a release half published. A tag name git would refuse, or an
  * existing tag that points at a different commit than `HEAD` (which would
@@ -344,14 +391,7 @@ export function planTags(
   tags: readonly string[],
   exec: ExecFn,
 ): readonly TagPlan[] {
-  const invalid = tags.filter((tag) => !isValidTagName(repoRoot, tag, exec));
-  if (invalid.length > 0) {
-    throw new SemanticReleaseError(
-      `Cannot create tag(s) git rejects: ${invalid.join(', ')}.`,
-      'EINVALIDTAG',
-      'A tag is the module directory plus the version, so rename the directory (tag names cannot contain spaces, `~`, `^`, `:`, `?`, `*`, `[`, `\\` or `..`, and cannot start with `-`), or exclude it with the `modules` option.',
-    );
-  }
+  checkTagNames(repoRoot, tags, exec);
   const head = exec('git', ['rev-parse', 'HEAD'], {
     cwd: repoRoot,
     stdio: 'pipe',

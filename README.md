@@ -131,12 +131,17 @@ its `go.mod` directory to the repository root:
 | `./assert/cert/manager/go.mod` | `assert/cert/manager/v1.2.3` |
 | `./env/flux/helm/go.mod`       | `env/flux/helm/v1.2.3`       |
 
-Every tag is checked before any is created or pushed. A directory name git
-cannot use in a tag (spaces, `~`, `^`, `:`, a leading `-`, and so on) stops
-the release with `EINVALIDTAG`, and a tag that already exists at another
+Tag names are checked as early as possible. `verifyConditions` checks every
+module directory with a placeholder version, and `prepare` checks the real
+tags before it rewrites any file, so a directory git cannot use in a tag
+(spaces, `~`, `^`, `:`, a component starting with `.` or ending in `.lock`,
+a leading `-`, and so on) stops the release with `EINVALIDTAG` before the
+release commit and the root tag exist. A tag that already exists at another
 commit than `HEAD` stops it with `ETAGMISMATCH`, because pushing it would
-publish old code under the new version. A tag that already points at `HEAD`
-is left as it is, so a re-run is safe.
+publish old code under the new version. `publish` repeats both checks for all
+tags before it creates or pushes the first one. A tag that already points at
+`HEAD` is left as it is, so a re-run is safe. The `modules` option only lists
+modules to include; there is no exclusion syntax.
 
 ## Known Issues
 

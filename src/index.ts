@@ -10,9 +10,10 @@ import { defaultExec, type ExecFn } from './exec.js';
 import { resolveConfig, type GomodPluginConfig } from './plugin-config.js';
 import {
   createAndPushTag,
-  deriveTagPrefix,
+  checkTagNames,
   discoverSubmoduleGoMods,
   planTags,
+  tagNames,
   readModulePath,
   updateGoModRequires,
 } from './gomod.js';
@@ -61,6 +62,8 @@ export async function verifyConditions(
   }
 
   const submodules = discoverSubmoduleGoMods(cwd, config.modules, logger);
+  // A directory git cannot tag is found now, not after the release commit.
+  checkTagNames(cwd, tagNames(cwd, submodules, '0.0.0'), exec);
   if (submodules.length === 0) {
     logger.log(
       'No submodule go.mod files found — operating in single-module mode.',
@@ -98,6 +101,8 @@ export async function prepare(
   logger.log('Root module: %s', rootModule);
 
   const submodules = discoverSubmoduleGoMods(cwd, config.modules, logger);
+  // Stop before any file is rewritten if a tag cannot be created later.
+  planTags(cwd, tagNames(cwd, submodules, version), exec);
   if (submodules.length === 0) {
     logger.log('No submodules to update.');
     return;
@@ -157,10 +162,7 @@ export async function publish(
     ...submodules,
   ];
 
-  const tags = allGoMods.map((goModPath) => {
-    const prefix = deriveTagPrefix(goModPath, cwd);
-    return prefix ? `${prefix}/v${version}` : `v${version}`;
-  });
+  const tags = tagNames(cwd, submodules, version);
   // Validate every tag before the first one is created or pushed.
   const plans = planTags(cwd, tags, exec);
   for (const plan of plans) {
