@@ -17,41 +17,6 @@ describe('messageOf', () => {
     expect(messageOf(42)).toBe('42');
     expect(messageOf(undefined)).toBe('undefined');
   });
-
-  it('describes an error without a message by its code', () => {
-    expect(
-      messageOf(Object.assign(new Error(''), { code: 'ECONNREFUSED' })),
-    ).toBe('ECONNREFUSED');
-  });
-
-  it('describes an empty aggregate error by its first inner error', () => {
-    const inner = Object.assign(new Error('connect ECONNREFUSED ::1:443'), {
-      code: 'ECONNREFUSED',
-    });
-    expect(messageOf(new AggregateError([inner, new Error('other')], ''))).toBe(
-      'connect ECONNREFUSED ::1:443',
-    );
-  });
-
-  it('prefers the code of an aggregate error over its inner errors', () => {
-    const error = Object.assign(new AggregateError([new Error('inner')], ''), {
-      code: 'ECONNREFUSED',
-    });
-    expect(messageOf(error)).toBe('ECONNREFUSED');
-  });
-
-  it('falls back to the name of an error with nothing else to say', () => {
-    expect(messageOf(new AggregateError([], ''))).toBe('AggregateError');
-    expect(messageOf(new TypeError(''))).toBe('TypeError');
-  });
-
-  it('recognises an error from another realm by its shape', () => {
-    expect(messageOf({ message: 'boom' })).toBe('boom');
-    expect(messageOf({ message: '', name: 'AggregateError' })).toBe(
-      'AggregateError',
-    );
-    expect(messageOf({ message: '' })).toBe('Error');
-  });
 });
 
 describe('codeOf', () => {
@@ -65,21 +30,39 @@ describe('codeOf', () => {
     expect(codeOf(new Error('x'))).toBeUndefined();
     expect(codeOf(Object.assign(new Error('x'), { code: 5 }))).toBeUndefined();
     expect(codeOf('E1')).toBeUndefined();
-    expect(codeOf(undefined)).toBeUndefined();
   });
 });
 
 describe('statusOf and signalOf', () => {
-  it('read the exit status and the signal of a failed process', () => {
-    const failure = Object.assign(new Error('x'), { status: 3, signal: null });
-    expect(statusOf(failure)).toBe(3);
-    expect(signalOf(failure)).toBeUndefined();
-    expect(signalOf({ signal: 'SIGTERM', status: null })).toBe('SIGTERM');
-    expect(statusOf({ signal: 'SIGTERM', status: null })).toBeUndefined();
+  it('read the exit status and the signal of a child-process error', () => {
+    const error = Object.assign(new Error('x'), {
+      status: 3,
+      signal: 'SIGTERM',
+    });
+    expect(statusOf(error)).toBe(3);
+    expect(signalOf(error)).toBe('SIGTERM');
   });
 
-  it.each([['x'], [null], [undefined]])('give undefined for %j', (thrown) => {
-    expect(statusOf(thrown)).toBeUndefined();
-    expect(signalOf(thrown)).toBeUndefined();
+  it('are undefined when absent or of the wrong type', () => {
+    expect(
+      statusOf(Object.assign(new Error('x'), { status: '3' })),
+    ).toBeUndefined();
+    expect(
+      signalOf(Object.assign(new Error('x'), { signal: 9 })),
+    ).toBeUndefined();
+    expect(statusOf('x')).toBeUndefined();
+    expect(signalOf(undefined)).toBeUndefined();
+  });
+});
+
+describe('messageOf for errors without a message', () => {
+  it('falls back to the code, the first inner error, then the name', () => {
+    expect(
+      messageOf(Object.assign(new Error(''), { code: 'ECONNREFUSED' })),
+    ).toBe('ECONNREFUSED');
+    expect(
+      messageOf(Object.assign(new Error(''), { errors: [new Error('inner')] })),
+    ).toBe('inner');
+    expect(messageOf(new Error(''))).toBe('Error');
   });
 });

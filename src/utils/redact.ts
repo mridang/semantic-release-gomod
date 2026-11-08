@@ -1,40 +1,66 @@
 /**
- * Bare access tokens recognised by their well-known prefixes: GitHub
- * (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), GitLab (`glpat-`),
- * npm (`npm_`) and Slack (`xox*-`).
- */
-const TOKEN =
-  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,}|npm_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,})/g;
-
-/**
- * Hide secrets in a text, such as a command's error output or a URL, so they
- * never reach a log or an error message. It hides:
- * - the user name and password of a URL (`scheme://user:password@host`), up
- *   to the last `@` before the host so a password containing `@` or `/` is
- *   covered, also when percent-encoded or when the scheme is in capitals;
- * - the values of query parameters that look like secrets (`?token=`,
- *   `&access_token=`, `api_key=`, `password=`, `secret=`, `signature=`);
- * - `Authorization` and `Proxy-Authorization` header values and `Bearer`
- *   tokens;
- * - bare GitHub, GitLab, npm and Slack tokens.
+ * Hide credentials in a piece of text that is about to be logged or put in an
+ * error message. This is a backstop that works on the shape of the text; the
+ * primary defence is not to put secrets in text at all.
  *
- * An `@` directly after a `/` (as in the Go proxy's `.../@v/list`) is not
- * treated as the end of a user name.
+ * Covered: `scheme://user:password@` (the password may contain `@` and `/`,
+ * and the scheme may be any case), `scheme://token@`, `token=`,
+ * `access_token=`, `password=` and `private_token=` query values,
+ * `Authorization:` header lines, `Bearer` tokens, and bare GitHub and GitLab
+ * tokens (`ghp_`, `github_pat_`, `glpat-`).
  *
- * @param text Text that may contain secrets.
- * @returns The text with each secret replaced by `***`.
+ * @param text Text that may contain credentials.
+ * @returns The text with every credential replaced by `***`.
  */
 export function redactCredentials(text: string): string {
   return text
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s]*[^\s/]@/gi, '$1***@')
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]*:\S*@/gi, '$1***@')
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+@/gi, '$1***@')
     .replace(
-      /([?&](?:[\w.-]*[_.-])?(?:token|apikey|key|secret|password|passwd|signature|sig)=)[^&\s#'"]*/gi,
+      /([?&](?:access_token|token|password|private_token)=)[^&\s#'"]+/gi,
       '$1***',
     )
+    .replace(/\b((?:proxy-)?authorization)\s*:[^\r\n]*/gi, '$1: ***')
+    .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer ***')
     .replace(
-      /\b((?:proxy-)?authorization\s*[:=]\s*)(?:(?:bearer|basic|token)\s+)?[^\s,;'"]+/gi,
-      '$1***',
-    )
-    .replace(/\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, '$1***')
-    .replace(TOKEN, '***');
+      /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,})/g,
+      '***',
+    );
+}
+
+/**
+ * Replace secrets in text that is about to be shown to a person. A secret is
+ * searched for in the forms it takes when a server or a tool echoes a URL
+ * back: as it is, percent-encoded (`encodeURIComponent`), form-encoded
+ * (`URLSearchParams`, where a space becomes `+`) and JSON-escaped with `/`
+ * written as `\/` (as PHP's `json_encode` does). Any other re-encoding is not
+ * recognised, so never put a secret in text that is shown if it can be left
+ * out.
+ *
+ * @param text Text that came from the network or from a child process.
+ * @param secrets The secrets to remove. Empty ones are ignored.
+ * @returns The text with every form of every secret replaced.
+ */
+export function redactSecrets(
+  text: string,
+  secrets: readonly string[],
+): string {
+  const forms = secrets
+    .filter((secret) => secret !== '')
+    .flatMap((secret) => [
+      secret,
+      encodeURIComponent(secret),
+      new URLSearchParams({ s: secret }).toString().slice(2),
+      JSON.stringify(secret).slice(1, -1).replaceAll('/', '\\/'),
+    ])
+    .toSorted((a, b) => b.length - a.length);
+  if (forms.length === 0) {
+    return text;
+  }
+  // One pass, so that a secret cannot match inside the marker of another.
+  const pattern = new RegExp(
+    forms.map((form) => form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
+    'g',
+  );
+  return text.replace(pattern, '[redacted]');
 }

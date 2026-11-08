@@ -1,33 +1,118 @@
 import SemanticReleaseError from '@semantic-release/error';
 import { statusOf } from './utils/error.js';
-import { run as defaultRun, type Run } from './utils/exec.js';
+import { run as defaultRun, type Runner } from './utils/exec.js';
 
 /**
- * How to build a `GitClient`.
+ * How to open a `GitRepository`.
  */
-export interface GitClientOptions {
+export interface GitOptions {
   /** The repository directory every command runs in. */
   readonly cwd: string;
   /** Runs a program; defaults to the real, shell-free runner. */
-  readonly run?: Run | undefined;
+  readonly run?: Runner | undefined;
 }
 
 /**
- * A handle on the git commands the plugin needs, run in one repository.
- * Every command is passed as a program and an argument list, never as shell
- * text, and git's answers are read from exit statuses and parsed output
- * rather than from its (localised) messages.
+ * What a `Tag` needs to run git: the repository directory and a runner.
  */
-export class GitClient {
+interface TagOptions {
+  readonly cwd: string;
+  readonly run: Runner;
+}
+
+/**
+ * A tag in a repository, which may or may not exist yet. git's answers are
+ * read from exit statuses, never from its (localised) messages.
+ */
+export class Tag {
+  readonly name: string;
   private readonly cwd: string;
-  private readonly run: Run;
+  private readonly run: Runner;
 
   /**
-   * @param options The repository directory and, for tests, a runner.
+   * @param name    The tag name, e.g. `assert/v1.2.3`.
+   * @param options The repository directory and the runner.
    */
-  constructor(options: GitClientOptions) {
+  constructor(name: string, options: TagOptions) {
+    this.name = name;
     this.cwd = options.cwd;
-    this.run = options.run ?? defaultRun;
+    this.run = options.run;
+  }
+
+  /**
+   * The commit the tag points at; an annotated tag is followed to the commit.
+   *
+   * @returns The commit hash, or undefined when the tag does not exist.
+   * @throws Whatever git failed with, unless it only answered "missing"
+   * (exit status 1), so a git that could not run is not mistaken for "no".
+   */
+  async commit(): Promise<string | undefined> {
+    try {
+      const out = await this.run(
+        'git',
+        ['rev-parse', '-q', '--verify', `refs/tags/${this.name}^{commit}`],
+        { cwd: this.cwd },
+      );
+      return out.trim();
+    } catch (err: unknown) {
+      if (statusOf(err) === 1) return undefined;
+      throw err;
+    }
+  }
+
+  /**
+   * Whether the tag exists.
+   *
+   * @returns True when the tag exists.
+   */
+  async exists(): Promise<boolean> {
+    const commit = await this.commit();
+    return commit !== undefined;
+  }
+
+  /**
+   * Create the tag at `HEAD`, as a lightweight tag.
+   *
+   * @returns This tag.
+   */
+  async create(): Promise<Tag> {
+    await this.run('git', ['tag', '--', this.name], { cwd: this.cwd });
+    return this;
+  }
+
+  /**
+   * Push the tag to the remote `origin`.
+   *
+   * @returns This tag.
+   */
+  async push(): Promise<Tag> {
+    await this.run('git', ['push', 'origin', `refs/tags/${this.name}`], {
+      cwd: this.cwd,
+    });
+    return this;
+  }
+}
+
+/**
+ * A git repository on disk.
+ */
+export class GitRepository {
+  readonly cwd: string;
+  private readonly run: Runner;
+
+  private constructor(cwd: string, run: Runner) {
+    this.cwd = cwd;
+    this.run = run;
+  }
+
+  /**
+   * Open the repository in a directory.
+   *
+   * @param options The directory and, for tests, a runner.
+   * @returns The repository.
+   */
+  static open(options: GitOptions): GitRepository {
+    return new GitRepository(options.cwd, options.run ?? defaultRun);
   }
 
   /**
@@ -36,9 +121,10 @@ export class GitClient {
    * @returns The version line git printed.
    * @throws SemanticReleaseError `ENOGIT` when git cannot be run.
    */
-  version(): string {
+  async version(): Promise<string> {
     try {
-      return this.run('git', ['--version'], { cwd: this.cwd }).trim();
+      const out = await this.run('git', ['--version'], { cwd: this.cwd });
+      return out.trim();
     } catch {
       throw new SemanticReleaseError(
         'git is not available.',
@@ -53,52 +139,43 @@ export class GitClient {
    *
    * @returns The full commit hash.
    */
-  head(): string {
-    return this.run('git', ['rev-parse', 'HEAD'], { cwd: this.cwd }).trim();
+  async head(): Promise<string> {
+    const out = await this.run('git', ['rev-parse', 'HEAD'], {
+      cwd: this.cwd,
+    });
+    return out.trim();
   }
 
   /**
-   * Whether git accepts a reference name.
+   * A tag of this repository.
    *
-   * @param ref A full reference such as `refs/tags/v1.2.3`.
-   * @returns True when `git check-ref-format` accepts it.
-   * @throws Whatever git failed with, unless it only answered "invalid"
-   * (exit status 1).
+   * @param name The tag name.
+   * @returns The tag, which may not exist yet.
    */
-  checkRefFormat(ref: string): boolean {
-    return this.answer(['check-ref-format', ref]);
+  tag(name: string): Tag {
+    return new Tag(name, { cwd: this.cwd, run: this.run });
   }
 
   /**
-   * The commit a local tag points at. An annotated tag is followed to the
-   * commit.
+   * Whether git accepts a tag name. A name starting with `-` is refused
+   * without asking git, which would read it as an option.
    *
-   * @param tag The tag name, e.g. `assert/v1.2.3`.
-   * @returns The commit hash, or undefined when the tag does not exist.
-   * @throws Whatever git failed with, unless it only answered "missing"
-   * (exit status 1).
+   * @param name The tag name.
+   * @returns True when `git check-ref-format` accepts `refs/tags/<name>`.
+   * @throws Whatever git failed with, unless it only answered "invalid" (exit
+   * status 1).
    */
-  commitOf(tag: string): string | undefined {
+  async isValidTagName(name: string): Promise<boolean> {
+    if (name.startsWith('-')) return false;
     try {
-      return this.run(
-        'git',
-        ['rev-parse', '-q', '--verify', `refs/tags/${tag}^{commit}`],
-        { cwd: this.cwd },
-      ).trim();
+      await this.run('git', ['check-ref-format', `refs/tags/${name}`], {
+        cwd: this.cwd,
+      });
+      return true;
     } catch (err: unknown) {
-      if (statusOf(err) === 1) return undefined;
+      if (statusOf(err) === 1) return false;
       throw err;
     }
-  }
-
-  /**
-   * Whether a local tag exists.
-   *
-   * @param tag The tag name.
-   * @returns True when the tag exists.
-   */
-  tagExists(tag: string): boolean {
-    return this.commitOf(tag) !== undefined;
   }
 
   /**
@@ -107,52 +184,17 @@ export class GitClient {
    * @returns A map from tag name to commit hash; an annotated tag maps to the
    * commit it peels to.
    */
-  lsRemoteTags(): ReadonlyMap<string, string> {
-    const listing = this.run('git', ['ls-remote', '--tags', 'origin'], {
+  async remoteTags(): Promise<ReadonlyMap<string, string>> {
+    const listing = await this.run('git', ['ls-remote', '--tags', 'origin'], {
       cwd: this.cwd,
     });
     // The peeled entry (`<tag>^{}`) follows its tag object, so it wins.
     return new Map(
       listing.split('\n').flatMap((line) => {
         const match = /^([0-9a-f]+)\trefs\/tags\/(.+?)(\^\{\})?$/.exec(line);
-        return match?.[1] && match[2] ? [[match[2], match[1]] as const] : [];
+        if (!match?.[1] || !match[2]) return [];
+        return [[match[2], match[1]] as const];
       }),
     );
-  }
-
-  /**
-   * Create a lightweight tag at `HEAD`.
-   *
-   * @param tag The tag name.
-   */
-  createTag(tag: string): void {
-    this.run('git', ['tag', '--', tag], { cwd: this.cwd });
-  }
-
-  /**
-   * Push one tag to the remote `origin`.
-   *
-   * @param tag The tag name.
-   */
-  pushTag(tag: string): void {
-    this.run('git', ['push', 'origin', `refs/tags/${tag}`], { cwd: this.cwd });
-  }
-
-  /**
-   * Ask git a yes/no question by its exit status.
-   *
-   * @param args The git arguments.
-   * @returns True for exit status 0, false for exit status 1.
-   * @throws Whatever git failed with for any other status or error, so a git
-   * that could not run is not mistaken for "no".
-   */
-  private answer(args: readonly string[]): boolean {
-    try {
-      this.run('git', args, { cwd: this.cwd });
-      return true;
-    } catch (err: unknown) {
-      if (statusOf(err) === 1) return false;
-      throw err;
-    }
   }
 }

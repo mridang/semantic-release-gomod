@@ -1,35 +1,28 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import SemanticReleaseError from '@semantic-release/error';
 import type {
   PrepareContext,
   PublishContext,
   VerifyConditionsContext,
 } from 'semantic-release';
-import SemanticReleaseError from '@semantic-release/error';
-import { GitClient } from './git.js';
-import { GoClient } from './go.js';
-import { run, type Run } from './utils/exec.js';
+import { GitRepository } from './git.js';
+import { GoModule } from './gomod.js';
 import {
   cwdOf,
   resolveConfig,
   type GomodPluginConfig,
 } from './plugin-config.js';
-import {
-  createAndPushTag,
-  checkTagNames,
-  discoverSubmoduleGoMods,
-  planTags,
-  tagNames,
-  readModulePath,
-  updateGoModRequires,
-} from './gomod.js';
+import { Release } from './release.js';
 import { messageOf } from './utils/error.js';
+import { run, type Runner } from './utils/exec.js';
 import { redactCredentials } from './utils/redact.js';
 
 /**
  * Verify that all preconditions for the plugin are met:
  *  - A root `go.mod` exists in the working directory.
  *  - `git` is available on PATH.
+ *  - Every module directory can be used in a git tag.
  *
  * A warning (not an error) is emitted when no submodule go.mod files
  * are found, since the plugin is still useful for single-module repos
@@ -42,7 +35,7 @@ import { redactCredentials } from './utils/redact.js';
 export async function verifyConditions(
   pluginConfig: GomodPluginConfig,
   context: VerifyConditionsContext,
-  runner: Run = run,
+  runner: Runner = run,
 ): Promise<void> {
   const { logger } = context;
   const cwd = cwdOf(context);
@@ -57,12 +50,16 @@ export async function verifyConditions(
     );
   }
 
-  const git = new GitClient({ cwd, run: runner });
-  git.version();
+  const repository = GitRepository.open({ cwd, run: runner });
+  await repository.version();
 
-  const submodules = discoverSubmoduleGoMods(cwd, config.modules, logger);
+  const submodules = GoModule.discover(cwd, config.modules, logger);
   // A directory git cannot tag is found now, not after the release commit.
-  checkTagNames(git, tagNames(cwd, submodules, '0.0.0'));
+  const modules = [GoModule.open(rootGoMod), ...submodules];
+  await Release.check(
+    repository,
+    modules.map((module) => module.tagName(cwd, '0.0.0')),
+  );
   if (submodules.length === 0) {
     logger.log(
       'No submodule go.mod files found — operating in single-module mode.',
@@ -86,7 +83,7 @@ export async function verifyConditions(
 export async function prepare(
   pluginConfig: GomodPluginConfig,
   context: PrepareContext,
-  runner: Run = run,
+  runner: Runner = run,
 ): Promise<void> {
   const {
     logger,
@@ -95,16 +92,17 @@ export async function prepare(
   const cwd = cwdOf(context);
   const config = resolveConfig(pluginConfig);
 
-  const go = new GoClient({ run: runner });
-  const rootGoMod = path.join(cwd, 'go.mod');
-  const rootModule = readModulePath(rootGoMod);
+  const root = GoModule.open(path.join(cwd, 'go.mod'), { run: runner });
+  const rootModule = root.modulePath();
   logger.log('Root module: %s', rootModule);
 
-  const submodules = discoverSubmoduleGoMods(cwd, config.modules, logger);
+  const submodules = GoModule.discover(cwd, config.modules, logger, {
+    run: runner,
+  });
   // Stop before any file is rewritten if a tag cannot be created later.
-  planTags(
-    new GitClient({ cwd, run: runner }),
-    tagNames(cwd, submodules, version),
+  await Release.plan(
+    GitRepository.open({ cwd, run: runner }),
+    [root, ...submodules].map((module) => module.tagName(cwd, version)),
     config.pushTags,
   );
   if (submodules.length === 0) {
@@ -112,22 +110,21 @@ export async function prepare(
     return;
   }
 
-  for (const goModPath of submodules) {
-    logger.log('Pinning requires in %s', path.relative(cwd, goModPath));
-    updateGoModRequires(goModPath, rootModule, version);
+  for (const submodule of submodules) {
+    logger.log('Pinning requires in %s', path.relative(cwd, submodule.file));
+    submodule.pin(rootModule, version);
 
-    if (!config.skipGoModTidy) {
-      const modDir = path.dirname(goModPath);
-      try {
-        go.modTidy(modDir);
-        logger.log('go mod tidy OK in %s', path.relative(cwd, modDir));
-      } catch (err: unknown) {
-        logger.warn(
-          'go mod tidy failed in %s: %s',
-          path.relative(cwd, modDir),
-          redactCredentials(messageOf(err)),
-        );
-      }
+    if (config.skipGoModTidy) continue;
+    const directory = path.relative(cwd, path.dirname(submodule.file));
+    try {
+      await submodule.tidy();
+      logger.log('go mod tidy OK in %s', directory);
+    } catch (err: unknown) {
+      logger.warn(
+        'go mod tidy failed in %s: %s',
+        directory,
+        redactCredentials(messageOf(err)),
+      );
     }
   }
 
@@ -139,9 +136,8 @@ export async function prepare(
  * including the root module.
  *
  * semantic-release creates the root tag (`vX.Y.Z`) before calling
- * publish; this step creates it silently when it already exists and
- * then creates all submodule tags
- * (e.g. `assert/cert/manager/vX.Y.Z`).
+ * publish; this step skips it when it already exists at `HEAD` and then
+ * creates all submodule tags (e.g. `assert/cert/manager/vX.Y.Z`).
  *
  * @param pluginConfig The plugin configuration.
  * @param context      The semantic-release context.
@@ -150,7 +146,7 @@ export async function prepare(
 export async function publish(
   pluginConfig: GomodPluginConfig,
   context: PublishContext,
-  runner: Run = run,
+  runner: Runner = run,
 ): Promise<void> {
   const {
     logger,
@@ -159,22 +155,19 @@ export async function publish(
   const cwd = cwdOf(context);
   const config = resolveConfig(pluginConfig);
 
-  // All go.mod files: submodules + root
-  const submodules = discoverSubmoduleGoMods(cwd, config.modules, logger);
-  const allGoMods: readonly string[] = [
-    path.join(cwd, 'go.mod'),
-    ...submodules,
+  const modules = [
+    GoModule.open(path.join(cwd, 'go.mod')),
+    ...GoModule.discover(cwd, config.modules, logger),
   ];
-
-  const tags = tagNames(cwd, submodules, version);
   // Validate every tag before the first one is created or pushed.
-  const git = new GitClient({ cwd, run: runner });
-  const plans = planTags(git, tags, config.pushTags);
-  for (const plan of plans) {
-    createAndPushTag(git, plan, config.pushTags, logger);
-  }
+  const release = await Release.plan(
+    GitRepository.open({ cwd, run: runner }),
+    modules.map((module) => module.tagName(cwd, version)),
+    config.pushTags,
+  );
+  await release.publish(logger);
 
-  logger.log('Tagged %d module(s) at v%s.', allGoMods.length, version);
+  logger.log('Tagged %d module(s) at v%s.', modules.length, version);
 }
 
 export default { verifyConditions, prepare, publish } as const;

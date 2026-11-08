@@ -1,8 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import SemanticReleaseError from '@semantic-release/error';
-import type { GitClient } from './git.js';
 import type { StepLogger } from './plugin-config.js';
+import { run as defaultRun, type Runner } from './utils/exec.js';
 
 /**
  * The part of the semantic-release context logger the helpers use.
@@ -103,7 +102,7 @@ function scan(dir: string): {
  * @param logger       Where skipped directories and empty patterns are reported.
  * @returns Sorted array of absolute go.mod paths (submodules only).
  */
-export function discoverSubmoduleGoMods(
+function discoverSubmoduleGoMods(
   root: string,
   globPatterns: readonly string[] | undefined,
   logger: Logger,
@@ -263,7 +262,7 @@ function matchParts(dir: string, parts: readonly string[]): Found {
  * @throws Error if no `module` line is found, if it uses the grouped
  * `module (` form, or if its quote is not closed.
  */
-export function readModulePath(goModPath: string): string {
+function readModulePath(goModPath: string): string {
   const content = fs.readFileSync(goModPath, 'utf8');
   const line = content
     .split('\n')
@@ -301,7 +300,7 @@ export function readModulePath(goModPath: string): string {
  * @param rootModule Root module import path (e.g. `"github.com/mridang/wilhelm"`).
  * @param newVersion New semver string without leading `v` (e.g. `"1.2.3"`).
  */
-export function updateGoModRequires(
+function updateGoModRequires(
   filePath: string,
   rootModule: string,
   newVersion: string,
@@ -349,7 +348,7 @@ export function updateGoModRequires(
  * @param pathApi   Path implementation (injectable to test Windows paths).
  * @returns Tag prefix with `/` separators (empty for the root module).
  */
-export function deriveTagPrefix(
+export function tagPrefix(
   goModPath: string,
   repoRoot: string,
   pathApi: Pick<typeof path, 'relative' | 'dirname' | 'sep'> = path,
@@ -361,129 +360,106 @@ export function deriveTagPrefix(
 }
 
 /**
- * A tag to create, and whether it already exists on the commit being released.
+ * How to open a `GoModule`.
  */
-export interface TagPlan {
-  /** The full tag, e.g. `"assert/cert/manager/v1.2.3"`. */
-  readonly tag: string;
-  /** True when the tag already points at `HEAD`, so it need not be created. */
-  readonly exists: boolean;
+export interface GoModuleOptions {
+  /** Runs a program; defaults to the real, shell-free runner. */
+  readonly run?: Runner | undefined;
 }
 
 /**
- * The tag of every module for a release: the module directory relative to
- * the repository root, then `/v<version>`; the root module's tag is just
- * `v<version>`.
- *
- * @param repoRoot   Absolute path to the repository root.
- * @param submodules Absolute paths of the submodule go.mod files.
- * @param version    The version without a leading `v`.
- * @returns The root tag first, then one tag per submodule.
+ * A go.mod file on disk. It knows its module path, which tag a release gives
+ * it, how to pin the requires on the root module to a new version, and how to
+ * tidy itself. The file is read when asked, so opening one never fails.
  */
-export function tagNames(
-  repoRoot: string,
-  submodules: readonly string[],
-  version: string,
-): readonly string[] {
-  return [path.join(repoRoot, 'go.mod'), ...submodules].map((goModPath) => {
-    const prefix = deriveTagPrefix(goModPath, repoRoot);
-    return prefix ? `${prefix}/v${version}` : `v${version}`;
-  });
-}
+export class GoModule {
+  readonly file: string;
+  private readonly run: Runner;
 
-/**
- * Refuse tag names git would reject, so a bad directory name stops the
- * release before anything is changed. Run it as early as the lifecycle
- * allows: once semantic-release has pushed the release commit and the root
- * tag, a later failure leaves a half published release.
- *
- * @param git  The repository's git client.
- * @param tags Every full tag the release will create.
- * @throws SemanticReleaseError `EINVALIDTAG` listing every refused tag.
- */
-export function checkTagNames(git: GitClient, tags: readonly string[]): void {
-  // A name starting with `-` is refused without asking git, which would read
-  // it as an option.
-  const invalid = tags.filter(
-    (tag) => tag.startsWith('-') || !git.checkRefFormat(`refs/tags/${tag}`),
-  );
-  if (invalid.length > 0) {
-    throw new SemanticReleaseError(
-      `Cannot create tag(s) git rejects: ${invalid.join(', ')}.`,
-      'EINVALIDTAG',
-      'A tag is the module directory plus the version, so rename the directory. Git refuses a tag with a space, `~`, `^`, `:`, `?`, `*`, `[`, `\\`, `..` or `@{`, a component that starts with `.` or ends with `.lock`, a trailing `.` or `/`, and a name starting with `-`. The `modules` option only lists modules to include (there is no exclusion syntax), so to leave a directory out, list the other modules explicitly.',
+  private constructor(file: string, run: Runner) {
+    this.file = file;
+    this.run = run;
+  }
+
+  /**
+   * Open a go.mod file.
+   *
+   * @param file    Absolute path to the go.mod file.
+   * @param options For tests, a runner.
+   * @returns The module.
+   */
+  static open(file: string, options: GoModuleOptions = {}): GoModule {
+    return new GoModule(file, options.run ?? defaultRun);
+  }
+
+  /**
+   * Find the submodules of a repository: every go.mod below the root except
+   * the root-level one, or the ones the glob patterns match. See the README
+   * for which directories are skipped and which patterns are supported.
+   *
+   * @param root     Absolute path to the repository root.
+   * @param patterns Optional glob patterns relative to the root.
+   * @param logger   Where skipped directories and empty patterns are reported.
+   * @param options  For tests, a runner.
+   * @returns The submodules, sorted by path.
+   */
+  static discover(
+    root: string,
+    patterns: readonly string[] | undefined,
+    logger: Logger,
+    options: GoModuleOptions = {},
+  ): readonly GoModule[] {
+    return discoverSubmoduleGoMods(root, patterns, logger).map((file) =>
+      GoModule.open(file, options),
     );
   }
-}
 
-/**
- * Check every tag before any of them is created or pushed, so a bad one
- * cannot leave a release half published. A tag name git would refuse, or an
- * existing tag, local or (when pushing) on the remote, that points at a
- * different commit than `HEAD` (which would publish stale code under the new
- * version), stops the release.
- *
- * @param git  The repository's git client.
- * @param tags Every full tag the release will create.
- * @param push Whether the tags will be pushed, so the remote is checked.
- * @returns For each tag, whether it already exists locally at `HEAD`.
- * @throws SemanticReleaseError `EINVALIDTAG` or `ETAGMISMATCH`.
- */
-export function planTags(
-  git: GitClient,
-  tags: readonly string[],
-  push: boolean,
-): readonly TagPlan[] {
-  checkTagNames(git, tags);
-  const head = git.head();
-  const remote = push ? git.lsRemoteTags() : new Map<string, string>();
-  const plans = tags.map((tag) => ({
-    tag,
-    local: git.commitOf(tag),
-    remote: remote.get(tag),
-  }));
-  const stale = plans.flatMap(({ tag, local, remote: onRemote }) => [
-    ...(local !== undefined && local !== head ? [`${tag} (${local})`] : []),
-    ...(onRemote !== undefined && onRemote !== head
-      ? [`${tag} on origin (${onRemote})`]
-      : []),
-  ]);
-  if (stale.length > 0) {
-    throw new SemanticReleaseError(
-      `Tag(s) already exist at another commit than HEAD (${head}): ${stale.join(', ')}.`,
-      'ETAGMISMATCH',
-      'Pushing them would publish old code under this version. Delete the stale tag(s) locally (`git tag -d <tag>`) and on the remote if they were pushed, or release a new version.',
-    );
-  }
-  return plans.map(({ tag, local }) => ({ tag, exists: local !== undefined }));
-}
-
-/**
- * Create a git tag locally and optionally push it to origin. A tag that
- * already points at `HEAD` is not created again, so the plugin can be called
- * idempotently. Use `planTags` first to validate the whole batch.
- *
- * @param git    The repository's git client.
- * @param plan   The tag, and whether it already exists at `HEAD`.
- * @param push   When true, push the tag to `origin`.
- * @param logger semantic-release logger.
- */
-export function createAndPushTag(
-  git: GitClient,
-  plan: TagPlan,
-  push: boolean,
-  logger: Logger,
-): void {
-  const { tag } = plan;
-  if (plan.exists) {
-    logger.log('Tag %s already exists, skipping', tag);
-  } else {
-    git.createTag(tag);
-    logger.log('Created tag %s', tag);
+  /**
+   * The module's import path, e.g. `github.com/mridang/wilhelm`.
+   *
+   * @returns The path of its `module` declaration.
+   * @throws Error if the file has no readable `module` declaration.
+   */
+  modulePath(): string {
+    return readModulePath(this.file);
   }
 
-  if (push) {
-    git.pushTag(tag);
-    logger.log('Pushed tag %s', tag);
+  /**
+   * The git tag a release gives this module: its directory relative to the
+   * repository root, then `/v<version>`; the root module's tag is just
+   * `v<version>`.
+   *
+   * @param root    Absolute path to the repository root.
+   * @param version The version without a leading `v`.
+   * @returns The tag name, e.g. `assert/cert/manager/v1.2.3`.
+   */
+  tagName(root: string, version: string): string {
+    const prefix = tagPrefix(this.file, root);
+    if (prefix === '') return `v${version}`;
+    return `${prefix}/v${version}`;
+  }
+
+  /**
+   * Pin every `require` of the root module (or one of its sub-paths) to a
+   * new version, leaving every other byte of the file alone.
+   *
+   * @param rootModule The root module's import path.
+   * @param version    The new version without a leading `v`.
+   * @returns This module.
+   */
+  pin(rootModule: string, version: string): GoModule {
+    updateGoModRequires(this.file, rootModule, version);
+    return this;
+  }
+
+  /**
+   * Run `go mod tidy` in the module's directory.
+   *
+   * @returns This module.
+   * @throws Whatever `go` failed with, for the caller to report.
+   */
+  async tidy(): Promise<GoModule> {
+    await this.run('go', ['mod', 'tidy'], { cwd: path.dirname(this.file) });
+    return this;
   }
 }

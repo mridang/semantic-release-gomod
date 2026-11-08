@@ -1,23 +1,8 @@
 import { describe, expect, it, jest } from '@jest/globals';
-import type { Run } from '../src/utils/exec.js';
 import { readFile, symlink } from 'node:fs/promises';
 import path, { join } from 'node:path';
-import {
-  createAndPushTag,
-  planTags,
-  deriveTagPrefix,
-  isInside,
-  discoverSubmoduleGoMods,
-  readModulePath,
-  updateGoModRequires,
-} from '../src/gomod.js';
-import {
-  commandsOf,
-  gitWith,
-  exitedWith,
-  HEAD,
-  mockExec,
-} from './utils/context.js';
+import { GoModule, isInside, tagPrefix } from '../src/gomod.js';
+import type { Runner } from '../src/utils/exec.js';
 import { goMod } from './utils/go-mod.js';
 import { recordingLogger } from './utils/logger.js';
 import { withTmp } from './utils/tmpdir.js';
@@ -33,9 +18,11 @@ const discover = (
   root: string,
   patterns?: readonly string[],
 ): readonly string[] =>
-  discoverSubmoduleGoMods(root, patterns, recordingLogger().logger);
+  GoModule.discover(root, patterns, recordingLogger().logger).map(
+    (module) => module.file,
+  );
 
-describe('discoverSubmoduleGoMods', () => {
+describe('GoModule.discover', () => {
   it('returns an empty array when only the root go.mod exists', async () => {
     await withTmp(
       { 'go.mod': goMod('github.com/example/repo') },
@@ -151,7 +138,7 @@ describe('discoverSubmoduleGoMods', () => {
       },
       async (dir) => {
         const { logger, lines } = recordingLogger();
-        discoverSubmoduleGoMods(dir, undefined, logger);
+        GoModule.discover(dir, undefined, logger);
         const text = lines.join('\n');
         expect(text).toContain(join(dir, 'vendor'));
         expect(text).toContain(join(dir, 'sub/node_modules'));
@@ -171,7 +158,7 @@ describe('discoverSubmoduleGoMods', () => {
         },
         async (dir) => {
           const { logger, lines } = recordingLogger();
-          discoverSubmoduleGoMods(dir, [pattern], logger);
+          GoModule.discover(dir, [pattern], logger);
           // The directories are reported when the walk reaches them, so
           // their contents are never listed.
           const skipped = lines.filter((l) => l.startsWith('Not searching'));
@@ -191,7 +178,7 @@ describe('discoverSubmoduleGoMods', () => {
       },
       async (dir) => {
         const { logger, lines } = recordingLogger();
-        discoverSubmoduleGoMods(
+        GoModule.discover(
           dir,
           ['**/go.mod', '*/go.mod', '**/**/go.mod'],
           logger,
@@ -209,7 +196,9 @@ describe('discoverSubmoduleGoMods', () => {
       async (dir) => {
         const { logger, lines } = recordingLogger();
         expect(
-          discoverSubmoduleGoMods(dir, ['sub/go.mod', 'svc/*/go.mod'], logger),
+          GoModule.discover(dir, ['sub/go.mod', 'svc/*/go.mod'], logger).map(
+            (module) => module.file,
+          ),
         ).toEqual([join(dir, 'sub/go.mod')]);
         expect(lines).toEqual([
           'Pattern "%s" in `modules` matched no go.mod files. svc/*/go.mod',
@@ -395,7 +384,7 @@ describe('links and the repository boundary', () => {
     await withTmp({ 'a/go.mod': goMod('x') }, async (dir) => {
       await symlink(join(dir, 'a'), join(dir, 'link'));
       const { logger, lines } = recordingLogger();
-      discoverSubmoduleGoMods(dir, ['link/go.mod'], logger);
+      GoModule.discover(dir, ['link/go.mod'], logger);
       expect(lines).toHaveLength(1);
     });
   });
@@ -426,12 +415,12 @@ describe('isInside', () => {
   });
 });
 
-describe('readModulePath', () => {
+describe('GoModule.modulePath', () => {
   it('extracts the module path from a go.mod file', async () => {
     await withTmp(
       { 'go.mod': goMod('github.com/example/repo') },
       async (dir) => {
-        expect(readModulePath(join(dir, 'go.mod'))).toBe(
+        expect(GoModule.open(join(dir, 'go.mod')).modulePath()).toBe(
           'github.com/example/repo',
         );
       },
@@ -446,7 +435,9 @@ describe('readModulePath', () => {
     ['a trailing comment', 'module github.com/example/q // the module\n'],
   ])('reads a module declaration with %s', async (_name, content) => {
     await withTmp({ 'go.mod': content }, async (dir) => {
-      expect(readModulePath(join(dir, 'go.mod'))).toBe('github.com/example/q');
+      expect(GoModule.open(join(dir, 'go.mod')).modulePath()).toBe(
+        'github.com/example/q',
+      );
     });
   });
 
@@ -459,7 +450,7 @@ describe('readModulePath', () => {
     ['a grouped declaration without a space', 'module(\n"x"\n)\n'],
   ])('says it cannot read %s', async (_name, content) => {
     await withTmp({ 'go.mod': content }, async (dir) => {
-      expect(() => readModulePath(join(dir, 'go.mod'))).toThrow(
+      expect(() => GoModule.open(join(dir, 'go.mod')).modulePath()).toThrow(
         /Grouped module declarations .* are not supported/,
       );
     });
@@ -471,7 +462,7 @@ describe('readModulePath', () => {
     ['mismatched quotes', 'module "github.com/example/q`\n'],
   ])('refuses %s', async (_name, content) => {
     await withTmp({ 'go.mod': content }, async (dir) => {
-      expect(() => readModulePath(join(dir, 'go.mod'))).toThrow(
+      expect(() => GoModule.open(join(dir, 'go.mod')).modulePath()).toThrow(
         /Unterminated quote/,
       );
     });
@@ -482,7 +473,7 @@ describe('readModulePath', () => {
     ['a word that only starts with module', 'modules github.com/x\n'],
   ])('throws for %s', async (_name, content) => {
     await withTmp({ 'go.mod': content }, async (dir) => {
-      expect(() => readModulePath(join(dir, 'go.mod'))).toThrow(
+      expect(() => GoModule.open(join(dir, 'go.mod')).modulePath()).toThrow(
         /No module declaration found/,
       );
     });
@@ -490,14 +481,14 @@ describe('readModulePath', () => {
 
   it('throws if no module line is present', async () => {
     await withTmp({ 'go.mod': 'go 1.21\n' }, async (dir) => {
-      expect(() => readModulePath(join(dir, 'go.mod'))).toThrow(
+      expect(() => GoModule.open(join(dir, 'go.mod')).modulePath()).toThrow(
         /No module declaration found in .*go\.mod/,
       );
     });
   });
 });
 
-describe('updateGoModRequires', () => {
+describe('GoModule.pin', () => {
   const update = async (
     requires: readonly string[],
     version = '2.0.0',
@@ -505,8 +496,7 @@ describe('updateGoModRequires', () => {
     withTmp(
       { 'go.mod': goMod('github.com/example/sub', requires) },
       async (dir) => {
-        updateGoModRequires(
-          join(dir, 'go.mod'),
+        GoModule.open(join(dir, 'go.mod')).pin(
           'github.com/example/repo',
           version,
         );
@@ -573,8 +563,7 @@ describe('updateGoModRequires', () => {
       '',
     ].join('\r\n');
     await withTmp({ 'go.mod': before }, async (dir) => {
-      updateGoModRequires(
-        join(dir, 'go.mod'),
+      GoModule.open(join(dir, 'go.mod')).pin(
         'github.com/example/repo',
         '2.0.0',
       );
@@ -603,8 +592,7 @@ describe('updateGoModRequires', () => {
         '',
       ].join(eol);
     await withTmp({ 'go.mod': file('v1.0.0') }, async (dir) => {
-      updateGoModRequires(
-        join(dir, 'go.mod'),
+      GoModule.open(join(dir, 'go.mod')).pin(
         'github.com/example/repo',
         '2.0.0',
       );
@@ -645,8 +633,7 @@ describe('updateGoModRequires', () => {
   ])('pins %s', async (_name, body) => {
     const file = `module x\n\n${body}`;
     await withTmp({ 'go.mod': file }, async (dir) => {
-      updateGoModRequires(
-        join(dir, 'go.mod'),
+      GoModule.open(join(dir, 'go.mod')).pin(
         'github.com/example/repo',
         '2.0.0',
       );
@@ -676,8 +663,7 @@ describe('updateGoModRequires', () => {
         '',
       ].join('\n');
     await withTmp({ 'go.mod': file('v1.0.0') }, async (dir) => {
-      updateGoModRequires(
-        join(dir, 'go.mod'),
+      GoModule.open(join(dir, 'go.mod')).pin(
         'github.com/example/repo',
         '2.0.0',
       );
@@ -718,8 +704,7 @@ describe('updateGoModRequires', () => {
           'module x\n\nrequire github.com/example/repo v1.0.0 // indirect\n',
       },
       async (dir) => {
-        updateGoModRequires(
-          join(dir, 'go.mod'),
+        GoModule.open(join(dir, 'go.mod')).pin(
           'github.com/example/repo',
           '2.0.0',
         );
@@ -741,8 +726,7 @@ describe('updateGoModRequires', () => {
   ])('leaves %s directives alone', async (_name, directive) => {
     const content = `module x\n\n${directive}\n`;
     await withTmp({ 'go.mod': content }, async (dir) => {
-      updateGoModRequires(
-        join(dir, 'go.mod'),
+      GoModule.open(join(dir, 'go.mod')).pin(
         'github.com/example/repo',
         '2.0.0',
       );
@@ -754,11 +738,7 @@ describe('updateGoModRequires', () => {
     await withTmp(
       { 'go.mod': goMod('x', ['github.com/aXb/repo v1.0.0']) },
       async (dir) => {
-        updateGoModRequires(
-          join(dir, 'go.mod'),
-          'github.com/a.b/repo',
-          '2.0.0',
-        );
+        GoModule.open(join(dir, 'go.mod')).pin('github.com/a.b/repo', '2.0.0');
         expect(await readFile(join(dir, 'go.mod'), 'utf8')).toContain(
           'github.com/aXb/repo v1.0.0',
         );
@@ -767,268 +747,109 @@ describe('updateGoModRequires', () => {
   });
 });
 
-describe('deriveTagPrefix', () => {
+describe('tagPrefix', () => {
   it('returns an empty string for the root go.mod', () => {
-    expect(deriveTagPrefix(join('/repo', 'go.mod'), '/repo')).toBe('');
+    expect(tagPrefix(join('/repo', 'go.mod'), '/repo')).toBe('');
   });
 
   it('uses forward slashes whatever the platform separator', () => {
     expect(
-      deriveTagPrefix('C:\\repo\\assert\\cert\\go.mod', 'C:\\repo', path.win32),
+      tagPrefix('C:\\repo\\assert\\cert\\go.mod', 'C:\\repo', path.win32),
     ).toBe('assert/cert');
   });
 
   it('returns the relative directory for submodules', () => {
     expect(
-      deriveTagPrefix(join('/repo', 'assert/cert/manager', 'go.mod'), '/repo'),
+      tagPrefix(join('/repo', 'assert/cert/manager', 'go.mod'), '/repo'),
     ).toBe('assert/cert/manager');
   });
 });
 
-describe('planTags', () => {
-  const OTHER = 'fedcba9876543210fedcba9876543210fedcba98';
-
-  it('marks tags by whether they already exist at HEAD', () => {
-    const exec = mockExec(() => undefined, { 'a/v1.0.0': HEAD });
-    expect(planTags(gitWith(exec), ['a/v1.0.0', 'b/v1.0.0'], false)).toEqual([
-      { tag: 'a/v1.0.0', exists: true },
-      { tag: 'b/v1.0.0', exists: false },
-    ]);
-  });
-
-  it('checks the names, then HEAD, then each tag, and creates nothing', () => {
-    const exec = mockExec();
-    planTags(gitWith(exec), ['v1.0.0', 'a/v1.0.0'], false);
-    expect(commandsOf(exec)).toEqual([
-      'git check-ref-format refs/tags/v1.0.0',
-      'git check-ref-format refs/tags/a/v1.0.0',
-      'git rev-parse HEAD',
-      'git rev-parse -q --verify refs/tags/v1.0.0^{commit}',
-      'git rev-parse -q --verify refs/tags/a/v1.0.0^{commit}',
-    ]);
-  });
-
-  it('refuses a tag that exists at another commit than HEAD', () => {
-    const exec = mockExec(() => undefined, { 'a/v1.0.0': OTHER });
-    expect(() =>
-      planTags(gitWith(exec), ['v1.0.0', 'a/v1.0.0'], false),
-    ).toThrow(
-      expect.objectContaining({
-        code: 'ETAGMISMATCH',
-        message: expect.stringContaining(`a/v1.0.0 (${OTHER})`),
-      }),
-    );
-  });
-
-  it('lists every stale tag in one error', () => {
-    const exec = mockExec(() => undefined, {
-      'a/v1.0.0': OTHER,
-      'b/v1.0.0': OTHER,
+describe('GoModule', () => {
+  it('opens a go.mod without reading it, so a broken file fails only when asked', async () => {
+    await withTmp({ 'go.mod': 'module (\n' }, async (dir) => {
+      const module = GoModule.open(join(dir, 'go.mod'));
+      expect(module.file).toBe(join(dir, 'go.mod'));
+      expect(() => module.modulePath()).toThrow(/Grouped module/);
     });
-    expect(() =>
-      planTags(gitWith(exec), ['a/v1.0.0', 'b/v1.0.0'], false),
-    ).toThrow(/a\/v1\.0\.0 .*b\/v1\.0\.0/);
   });
 
-  it('refuses a name git rejects before it looks at any tag', () => {
-    const exec = mockExec((cmd) => {
-      if (cmd.endsWith('refs/tags/bad name/v1.0.0')) throw exitedWith(1);
+  it('names the tag a release gives it', () => {
+    const root = join('/repo');
+    expect(GoModule.open(join(root, 'go.mod')).tagName(root, '1.2.3')).toBe(
+      'v1.2.3',
+    );
+    expect(
+      GoModule.open(join(root, 'assert/cert/go.mod')).tagName(root, '1.2.3'),
+    ).toBe('assert/cert/v1.2.3');
+  });
+
+  it('pins and returns itself, so calls chain', async () => {
+    await withTmp(
+      { 'go.mod': goMod('x', ['github.com/example/repo v1.0.0']) },
+      async (dir) => {
+        const module = GoModule.open(join(dir, 'go.mod'));
+        expect(module.pin('github.com/example/repo', '2.0.0')).toBe(module);
+        expect(await readFile(join(dir, 'go.mod'), 'utf8')).toContain(
+          'github.com/example/repo v2.0.0',
+        );
+      },
+    );
+  });
+
+  it('discovers modules that carry the runner they were given', async () => {
+    await withTmp(
+      { 'a/go.mod': goMod('github.com/example/repo/a') },
+      async (dir) => {
+        const run = jest.fn<Runner>(async () => '');
+        const [module] = GoModule.discover(
+          dir,
+          undefined,
+          recordingLogger().logger,
+          {
+            run,
+          },
+        );
+        await module?.tidy();
+        expect(run).toHaveBeenCalledWith('go', ['mod', 'tidy'], {
+          cwd: join(dir, 'a'),
+        });
+      },
+    );
+  });
+
+  describe('tidy', () => {
+    it('runs go mod tidy in the module directory and returns the module', async () => {
+      const run = jest.fn<Runner>(async () => '');
+      const module = GoModule.open('/repo/sub/go.mod', { run });
+      expect(await module.tidy()).toBe(module);
+      expect(run.mock.calls).toEqual([
+        ['go', ['mod', 'tidy'], { cwd: '/repo/sub' }],
+      ]);
     });
-    expect(() =>
-      planTags(gitWith(exec), ['v1.0.0', 'bad name/v1.0.0'], false),
-    ).toThrow(
-      expect.objectContaining({
-        code: 'EINVALIDTAG',
-        message: expect.stringContaining('bad name/v1.0.0'),
-      }),
-    );
-    expect(commandsOf(exec)).toEqual([
-      'git check-ref-format refs/tags/v1.0.0',
-      'git check-ref-format refs/tags/bad name/v1.0.0',
-    ]);
-  });
 
-  it('refuses a tag starting with a dash without asking git', () => {
-    const exec = mockExec();
-    expect(() => planTags(gitWith(exec), ['-dash/v1.0.0'], false)).toThrow(
-      expect.objectContaining({ code: 'EINVALIDTAG' }),
-    );
-    expect(exec).not.toHaveBeenCalled();
-  });
-});
-
-describe('planTags and the remote', () => {
-  const OTHER = 'fedcba9876543210fedcba9876543210fedcba98';
-
-  it('refuses a tag that exists on the remote at another commit', () => {
-    const exec = mockExec(() => undefined, {}, { 'sub/v1.0.0': OTHER });
-    expect(() =>
-      planTags(gitWith(exec), ['v1.0.0', 'sub/v1.0.0'], true),
-    ).toThrow(
-      expect.objectContaining({
-        code: 'ETAGMISMATCH',
-        message: expect.stringContaining(`sub/v1.0.0 on origin (${OTHER})`),
-      }),
-    );
-  });
-
-  it('accepts a remote tag at HEAD and an annotated tag peeled to HEAD', () => {
-    const exec = jest.fn<Run>((file, args) => {
-      const cmd = [file, ...args].join(' ');
-      if (cmd === 'git rev-parse HEAD') return HEAD;
-      if (cmd === 'git ls-remote --tags origin') {
-        return `${OTHER}\trefs/tags/a/v1.0.0\n${HEAD}\trefs/tags/a/v1.0.0^{}\n${HEAD}\trefs/tags/v1.0.0\n`;
-      }
-      if (cmd.includes('--verify')) throw exitedWith(1);
-      return '';
+    it('passes a hostile directory name as a cwd, never as shell text', async () => {
+      const run = jest.fn<Runner>(async () => '');
+      await GoModule.open('/repo/$(id);x y/go.mod', { run }).tidy();
+      expect(run.mock.calls).toEqual([
+        ['go', ['mod', 'tidy'], { cwd: '/repo/$(id);x y' }],
+      ]);
     });
-    expect(planTags(gitWith(exec), ['v1.0.0', 'a/v1.0.0'], true)).toEqual([
-      { tag: 'v1.0.0', exists: false },
-      { tag: 'a/v1.0.0', exists: false },
-    ]);
-  });
 
-  it('refuses an annotated remote tag whose peeled commit is not HEAD', () => {
-    const exec = jest.fn<Run>((file, args) => {
-      const cmd = [file, ...args].join(' ');
-      if (cmd === 'git rev-parse HEAD') return HEAD;
-      if (cmd === 'git ls-remote --tags origin') {
-        return `${HEAD}\trefs/tags/a/v1.0.0\n${OTHER}\trefs/tags/a/v1.0.0^{}\n`;
-      }
-      if (cmd.includes('--verify')) throw exitedWith(1);
-      return '';
-    });
-    expect(() => planTags(gitWith(exec), ['a/v1.0.0'], true)).toThrow(
-      expect.objectContaining({ code: 'ETAGMISMATCH' }),
-    );
-  });
-
-  it('does not contact the remote when the tags are not pushed', () => {
-    const exec = mockExec();
-    planTags(gitWith(exec), ['v1.0.0'], false);
-    expect(commandsOf(exec).some((cmd) => cmd.includes('ls-remote'))).toBe(
-      false,
-    );
-  });
-
-  it('asks the remote once, after the local checks', () => {
-    const exec = mockExec();
-    planTags(gitWith(exec), ['v1.0.0'], true);
-    expect(commandsOf(exec).filter((cmd) => cmd.includes('ls-remote'))).toEqual(
-      ['git ls-remote --tags origin'],
-    );
-  });
-
-  it('rethrows a failing ls-remote', () => {
-    const exec = jest.fn<Run>((file, args) => {
-      if (args.includes('ls-remote')) throw exitedWith(128);
-      return file === 'git' && args[0] === 'rev-parse' ? HEAD : '';
-    });
-    expect(() => planTags(gitWith(exec), ['v1.0.0'], true)).toThrow(
-      expect.objectContaining({ status: 128 }),
-    );
-  });
-});
-
-describe('planTags failures that are not git answering no', () => {
-  it.each([
-    ['status 128', exitedWith(128)],
-    [
-      'a missing git',
-      Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }),
-    ],
-    ['a kill', Object.assign(new Error('killed'), { signal: 'SIGKILL' })],
-  ])(
-    'rethrows %s from check-ref-format instead of calling the tag invalid',
-    (_name, failure) => {
-      const exec = mockExec((cmd) => {
-        if (cmd.startsWith('git check-ref-format')) throw failure;
+    it('lets a failure propagate for the caller to report', async () => {
+      const failure = new Error('go: no network');
+      const run = jest.fn<Runner>(async () => {
+        throw failure;
       });
-      expect(() => planTags(gitWith(exec), ['v1.0.0'], false)).toThrow(failure);
-    },
-  );
-
-  it.each([
-    ['status 128', exitedWith(128)],
-    [
-      'a missing git',
-      Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }),
-    ],
-  ])(
-    'rethrows %s from the tag lookup instead of calling the tag missing',
-    (_name, failure) => {
-      const exec = jest.fn<Run>((file, args) => {
-        if (args.includes('--verify')) throw failure;
-        return file === 'git' && args[0] === 'rev-parse' ? HEAD : '';
-      });
-      expect(() => planTags(gitWith(exec), ['v1.0.0'], false)).toThrow(failure);
-    },
-  );
-});
-
-describe('createAndPushTag', () => {
-  const options = { cwd: '/repo' };
-  const missing = { tag: 'v1.2.3', exists: false };
-
-  it('creates and pushes the tag', () => {
-    const exec = mockExec();
-    const { logger, lines } = recordingLogger();
-    createAndPushTag(gitWith(exec), missing, true, logger);
-    expect(exec.mock.calls).toEqual([
-      ['git', ['tag', '--', 'v1.2.3'], options],
-      ['git', ['push', 'origin', 'refs/tags/v1.2.3'], options],
-    ]);
-    expect(lines).toEqual(['Created tag %s v1.2.3', 'Pushed tag %s v1.2.3']);
-  });
-
-  it.each([
-    ['a semicolon', 'a;b/v1.0.0'],
-    ['a command substitution', '$(id)/v1.0.0'],
-    ['quotes and backticks', '"a\'`b/v1.0.0'],
-    ['spaces', 'a b/v1.0.0'],
-  ])('passes a tag with %s as one argument', (_name, tag) => {
-    const exec = mockExec();
-    createAndPushTag(
-      gitWith(exec),
-      { tag, exists: false },
-      true,
-      recordingLogger().logger,
-    );
-    expect(exec.mock.calls.map(([file, args]) => [file, ...args])).toEqual([
-      ['git', 'tag', '--', tag],
-      ['git', 'push', 'origin', `refs/tags/${tag}`],
-    ]);
-  });
-
-  it('only creates the tag when push is off', () => {
-    const exec = mockExec();
-    createAndPushTag(gitWith(exec), missing, false, recordingLogger().logger);
-    expect(commandsOf(exec)).toEqual(['git tag -- v1.2.3']);
-  });
-
-  it('skips a tag that exists at HEAD and still pushes', () => {
-    const exec = mockExec();
-    const { logger, lines } = recordingLogger();
-    createAndPushTag(
-      gitWith(exec),
-      { tag: 'v1.2.3', exists: true },
-      true,
-      logger,
-    );
-    expect(lines).toEqual([
-      'Tag %s already exists, skipping v1.2.3',
-      'Pushed tag %s v1.2.3',
-    ]);
-    expect(commandsOf(exec)).toEqual(['git push origin refs/tags/v1.2.3']);
-  });
-
-  it('rethrows tag errors without pushing', () => {
-    const exec = mockExec((cmd) => {
-      if (cmd.startsWith('git tag')) throw new Error('fatal: cannot lock ref');
+      await expect(
+        GoModule.open('/repo/sub/go.mod', { run }).tidy(),
+      ).rejects.toBe(failure);
     });
-    expect(() =>
-      createAndPushTag(gitWith(exec), missing, true, recordingLogger().logger),
-    ).toThrow('cannot lock ref');
-    expect(exec).toHaveBeenCalledTimes(1);
+
+    it('uses the real runner when none is given', async () => {
+      await expect(
+        GoModule.open('/nonexistent-gomod/go.mod').tidy(),
+      ).rejects.toBeInstanceOf(Error);
+    });
   });
 });

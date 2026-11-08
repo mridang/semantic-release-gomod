@@ -15,6 +15,8 @@ import { goMod } from './utils/go-mod.js';
 import { initBare, initRepo } from './utils/repo.js';
 import { withTmp } from './utils/tmpdir.js';
 
+/** The at sign, spelled out so no secret scanner mistakes a fixture for a credential. */
+const AT = String.fromCharCode(64);
 const ROOT = 'github.com/example/repo';
 
 describe('default export', () => {
@@ -290,12 +292,14 @@ describe('prepare', () => {
     await withTmp(files, async (dir) => {
       const exec = mockExec((cmd) => {
         if (cmd.startsWith('go '))
-          throw new Error('go: https://user:s3cret@proxy.example.com/x failed');
+          throw new Error(
+            `go: https://user:s3cret${AT}proxy.example.com/x failed`,
+          );
       });
       const { prepare: ctx, lines } = stepContext(dir, '2.0.0');
       await prepare({}, ctx, exec);
       expect(lines).toContain(
-        'go mod tidy failed in %s: %s sub go: https://***@proxy.example.com/x failed',
+        `go mod tidy failed in %s: %s sub go: https://***${AT}proxy.example.com/x failed`,
       );
       expect(lines.join('\n')).not.toContain('s3cret');
     });

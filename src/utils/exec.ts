@@ -1,80 +1,119 @@
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { codeOf, messageOf, signalOf, statusOf } from './error.js';
+import { isRecord } from './object.js';
 import { redactCredentials } from './redact.js';
 
 /**
- * Options for running a program.
- */
-interface RunOptions {
-  /** The directory to run the program in. */
-  readonly cwd?: string | undefined;
-  /** The environment of the program; the current one when omitted. */
-  readonly env?: Readonly<Record<string, string | undefined>> | undefined;
-}
-
-/**
- * Runs a program synchronously, without a shell: the program and each
- * argument are passed separately, so values such as tag names and directory
- * names are never interpreted as shell syntax. It returns what the program
- * wrote to stdout and throws when it exits with a non-zero status.
- * Accepting this as a parameter lets callers be unit-tested with a fake.
- */
-export type Run = (
-  file: string,
-  args: readonly string[],
-  options?: RunOptions,
-) => string;
-
-/**
- * The largest output, in bytes, a child process may write before it is
- * killed. Node's default of 1 MiB makes chatty tools fail with `ENOBUFS`.
+ * Largest output captured from a command: 64 MiB, so a long listing is not
+ * mistaken for a failure.
  */
 const MAX_BUFFER = 64 * 1024 * 1024;
 
 /**
- * A failed child process whose message has been redacted. It keeps the
- * machine-readable fields of the original error, so callers can tell a
- * missing program (`ENOENT`) from a failing one (`status`) or a kill
- * (`signal`), without carrying the unredacted original along.
+ * Options for running a command.
  */
-class ExecError extends Error {
+export interface ExecOptions {
+  /** Working directory of the command. */
+  readonly cwd?: string;
+  /** Variables added to the current environment for the command. */
+  readonly env?: Readonly<Record<string, string>>;
+  /** Largest stdout or stderr captured, in bytes. */
+  readonly maxBuffer?: number;
+}
+
+/**
+ * Runs a program without a shell and resolves with its standard output.
+ */
+export type Runner = (
+  file: string,
+  args: readonly string[],
+  options?: ExecOptions,
+) => Promise<string>;
+
+/**
+ * The error raised when a command cannot be started or exits unsuccessfully.
+ * It carries the same shape in every plugin: `code` (a system error such as
+ * `ENOENT`), `status` (the exit code), `signal`, and the captured output.
+ * Credentials are removed from the message and the output.
+ */
+export class ExecError extends Error {
   readonly code: string | undefined;
+
   readonly status: number | undefined;
+
   readonly signal: string | undefined;
 
+  readonly stdout: string;
+
+  readonly stderr: string;
+
   /**
-   * @param source The error thrown by `execFileSync`.
+   * @param message Description of the failure, already free of credentials.
+   * @param details The code, exit status, signal and captured output.
    */
-  constructor(source: unknown) {
-    super(redactCredentials(messageOf(source)));
+  constructor(
+    message: string,
+    details: {
+      readonly code: string | undefined;
+      readonly status: number | undefined;
+      readonly signal: string | undefined;
+      readonly stdout: string;
+      readonly stderr: string;
+    },
+  ) {
+    super(message);
     this.name = 'ExecError';
-    this.code = codeOf(source);
-    this.status = statusOf(source);
-    this.signal = signalOf(source);
+    this.code = details.code;
+    this.status = details.status;
+    this.signal = details.signal;
+    this.stdout = details.stdout;
+    this.stderr = details.stderr;
   }
 }
 
 /**
- * Run a program with `execFileSync`. A failure is rethrown with credentials
- * in URLs (such as a token in a remote) redacted from its message, since
- * tools echo the remote in their errors, and with the `code`, `status` and
- * `signal` of the original kept.
+ * Run a program without a shell. Arguments are passed as an array, so nothing
+ * in them is interpreted; the environment is the current one plus
+ * `options.env`.
  *
- * @param file The program to run.
+ * @param file Program to run.
  * @param args Its arguments.
- * @param options Where and with what environment to run it.
- * @returns What the program wrote to stdout.
- * @throws Error when the program cannot be run or exits unsuccessfully.
+ * @param options Working directory, extra environment and output limit.
+ * @returns The standard output as a string.
+ * @throws ExecError when the program cannot be started or fails; its message
+ *   and output have credentials redacted.
  */
-export const run: Run = (file, args, options) => {
-  try {
-    return execFileSync(file, args, {
-      maxBuffer: MAX_BUFFER,
-      ...options,
-      encoding: 'utf8',
-      stdio: 'pipe',
-    });
-  } catch (err: unknown) {
-    throw new ExecError(err);
-  }
-};
+export const run: Runner = (file, args, options = {}) =>
+  new Promise((resolve, reject) => {
+    execFile(
+      file,
+      [...args],
+      {
+        cwd: options.cwd,
+        env: { ...process.env, ...options.env },
+        maxBuffer: options.maxBuffer ?? MAX_BUFFER,
+        encoding: 'utf8',
+      },
+      (error, stdout, stderr) => {
+        if (error === null) {
+          resolve(stdout);
+          return;
+        }
+        const text = (value: unknown, fallback: string): string =>
+          redactCredentials(typeof value === 'string' ? value : fallback);
+        reject(
+          new ExecError(redactCredentials(messageOf(error)), {
+            code: codeOf(error),
+            status:
+              statusOf(error) ??
+              (isRecord(error) && typeof error.code === 'number'
+                ? error.code
+                : undefined),
+            signal: signalOf(error),
+            stdout: text(stdout, ''),
+            stderr: text(stderr, ''),
+          }),
+        );
+      },
+    );
+  });

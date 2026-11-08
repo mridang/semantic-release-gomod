@@ -1,128 +1,107 @@
 import { describe, expect, it, jest } from '@jest/globals';
-import { GitClient } from '../src/git.js';
-import type { Run } from '../src/utils/exec.js';
+import { GitRepository, Tag } from '../src/git.js';
+import type { ExecOptions, Runner } from '../src/utils/exec.js';
 import { exitedWith } from './utils/context.js';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 const OTHER = 'fedcba9876543210fedcba9876543210fedcba98';
 
 /**
- * A client whose runner answers with a fixed result or failure.
+ * A repository whose runner answers every command the same way.
  *
- * @param outcome What the runner returns, or the error it throws.
- * @returns The client and the runner, to inspect its calls.
+ * @param outcome What the runner returns, or the error it rejects with.
+ * @returns The repository and the runner, to inspect its calls.
  */
-function clientThat(outcome: string | Error): {
-  readonly git: GitClient;
-  readonly run: jest.Mock<Run>;
+function repositoryThat(outcome: string | Error): {
+  readonly repository: GitRepository;
+  readonly run: jest.Mock<Runner>;
 } {
-  const run = jest.fn<Run>(() => {
+  const run = jest.fn<Runner>(async () => {
     if (outcome instanceof Error) throw outcome;
     return outcome;
   });
-  return { git: new GitClient({ cwd: '/repo', run }), run };
+  return { repository: GitRepository.open({ cwd: '/repo', run }), run };
 }
 
-describe('GitClient', () => {
-  it('uses the real runner when none is given', () => {
-    expect(new GitClient({ cwd: process.cwd() }).version()).toMatch(
-      /^git version/,
-    );
+/** Every git command runs in the repository directory. */
+const inRepo: ExecOptions = { cwd: '/repo' };
+
+const missingProgram = Object.assign(new Error('spawn git ENOENT'), {
+  code: 'ENOENT',
+});
+
+describe('GitRepository', () => {
+  it('uses the real runner when none is given', async () => {
+    const repository = GitRepository.open({ cwd: process.cwd() });
+    await expect(repository.version()).resolves.toMatch(/^git version/);
   });
 
   describe('version', () => {
-    it('runs git --version in the repository and returns the line', () => {
-      const { git, run } = clientThat('git version 2.45.0\n');
-      expect(git.version()).toBe('git version 2.45.0');
-      expect(run).toHaveBeenCalledWith('git', ['--version'], { cwd: '/repo' });
+    it('runs git --version in the repository and returns the line', async () => {
+      const { repository, run } = repositoryThat('git version 2.45.0\n');
+      await expect(repository.version()).resolves.toBe('git version 2.45.0');
+      expect(run).toHaveBeenCalledWith('git', ['--version'], inRepo);
     });
 
     it.each([
-      [
-        'a missing git',
-        Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }),
-      ],
+      ['a missing git', missingProgram],
       ['a failing git', exitedWith(127)],
-    ])('maps %s to ENOGIT', (_name, failure) => {
-      expect(() => clientThat(failure).git.version()).toThrow(
-        expect.objectContaining({
-          code: 'ENOGIT',
-          message: 'git is not available.',
-        }),
-      );
+    ])('maps %s to ENOGIT', async (_name, failure) => {
+      await expect(
+        repositoryThat(failure).repository.version(),
+      ).rejects.toMatchObject({
+        code: 'ENOGIT',
+        message: 'git is not available.',
+      });
     });
   });
 
   describe('head', () => {
-    it('returns the trimmed commit of HEAD', () => {
-      const { git, run } = clientThat(`${SHA}\n`);
-      expect(git.head()).toBe(SHA);
+    it('returns the trimmed commit of HEAD', async () => {
+      const { repository, run } = repositoryThat(`${SHA}\n`);
+      await expect(repository.head()).resolves.toBe(SHA);
       expect(run).toHaveBeenCalledWith('git', ['rev-parse', 'HEAD'], {
         cwd: '/repo',
       });
     });
   });
 
-  describe('checkRefFormat', () => {
-    it('is true when git accepts the name', () => {
-      const { git, run } = clientThat('');
-      expect(git.checkRefFormat('refs/tags/v1.2.3')).toBe(true);
+  describe('isValidTagName', () => {
+    it('is true when git accepts the name', async () => {
+      const { repository, run } = repositoryThat('');
+      await expect(repository.isValidTagName('sub/v1.2.3')).resolves.toBe(true);
       expect(run).toHaveBeenCalledWith(
         'git',
-        ['check-ref-format', 'refs/tags/v1.2.3'],
-        { cwd: '/repo' },
+        ['check-ref-format', 'refs/tags/sub/v1.2.3'],
+        inRepo,
       );
     });
 
-    it('is false when git exits with status 1', () => {
-      expect(
-        clientThat(exitedWith(1)).git.checkRefFormat('refs/tags/a b'),
-      ).toBe(false);
+    it('is false when git exits with status 1', async () => {
+      const { repository } = repositoryThat(exitedWith(1));
+      await expect(repository.isValidTagName('a b/v1')).resolves.toBe(false);
+    });
+
+    it('refuses a name starting with a dash without asking git', async () => {
+      const { repository, run } = repositoryThat('');
+      await expect(repository.isValidTagName('-dash/v1')).resolves.toBe(false);
+      expect(run).not.toHaveBeenCalled();
     });
 
     it.each([
       ['status 128', exitedWith(128)],
-      ['a missing program', Object.assign(new Error('x'), { code: 'ENOENT' })],
+      ['a missing program', missingProgram],
       ['a signal', Object.assign(new Error('x'), { signal: 'SIGKILL' })],
-    ])('rethrows %s instead of answering no', (_name, failure) => {
-      expect(() =>
-        clientThat(failure).git.checkRefFormat('refs/tags/v1'),
-      ).toThrow(failure);
+    ])('rethrows %s instead of answering no', async (_name, failure) => {
+      await expect(
+        repositoryThat(failure).repository.isValidTagName('v1'),
+      ).rejects.toBe(failure);
     });
   });
 
-  describe('commitOf and tagExists', () => {
-    it('asks for the commit the tag peels to', () => {
-      const { git, run } = clientThat(`${SHA}\n`);
-      expect(git.commitOf('sub/v1.2.3')).toBe(SHA);
-      expect(run).toHaveBeenCalledWith(
-        'git',
-        ['rev-parse', '-q', '--verify', 'refs/tags/sub/v1.2.3^{commit}'],
-        { cwd: '/repo' },
-      );
-    });
-
-    it('is undefined for a missing tag, and tagExists is false', () => {
-      const { git } = clientThat(exitedWith(1));
-      expect(git.commitOf('v1.2.3')).toBeUndefined();
-      expect(git.tagExists('v1.2.3')).toBe(false);
-    });
-
-    it('reports an existing tag', () => {
-      expect(clientThat(SHA).git.tagExists('v1.2.3')).toBe(true);
-    });
-
-    it.each([
-      ['status 128', exitedWith(128)],
-      ['a missing program', Object.assign(new Error('x'), { code: 'ENOENT' })],
-    ])('rethrows %s instead of calling the tag missing', (_name, failure) => {
-      expect(() => clientThat(failure).git.commitOf('v1.2.3')).toThrow(failure);
-    });
-  });
-
-  describe('lsRemoteTags', () => {
-    it('lists the tags of origin, annotated ones peeled to their commit', () => {
-      const { git, run } = clientThat(
+  describe('remoteTags', () => {
+    it('lists the tags of origin, annotated ones peeled to their commit', async () => {
+      const { repository, run } = repositoryThat(
         [
           `${OTHER}\trefs/tags/a/v1.0.0`,
           `${SHA}\trefs/tags/a/v1.0.0^{}`,
@@ -131,7 +110,7 @@ describe('GitClient', () => {
           '',
         ].join('\n'),
       );
-      expect(git.lsRemoteTags()).toEqual(
+      await expect(repository.remoteTags()).resolves.toEqual(
         new Map([
           ['a/v1.0.0', SHA],
           ['v1.0.0', SHA],
@@ -146,32 +125,86 @@ describe('GitClient', () => {
       );
     });
 
-    it('is empty for an empty listing', () => {
-      expect(clientThat('').git.lsRemoteTags().size).toBe(0);
+    it('is empty for an empty listing', async () => {
+      const tags = await repositoryThat('').repository.remoteTags();
+      expect(tags.size).toBe(0);
     });
 
-    it('rethrows a failing remote', () => {
+    it('rethrows a failing remote', async () => {
       const failure = exitedWith(128);
-      expect(() => clientThat(failure).git.lsRemoteTags()).toThrow(failure);
+      await expect(
+        repositoryThat(failure).repository.remoteTags(),
+      ).rejects.toBe(failure);
     });
   });
 
-  describe('createTag and pushTag', () => {
-    it('creates a tag with -- so a name is never an option', () => {
-      const { git, run } = clientThat('');
-      git.createTag('sub/v1.2.3');
+  describe('tag', () => {
+    it('gives a tag of the repository that runs in its directory', async () => {
+      const { repository, run } = repositoryThat(SHA);
+      const tag = repository.tag('v1.2.3');
+      expect(tag).toBeInstanceOf(Tag);
+      expect(tag.name).toBe('v1.2.3');
+      await tag.commit();
+      expect(run).toHaveBeenCalledWith('git', expect.any(Array), {
+        cwd: '/repo',
+      });
+    });
+  });
+});
+
+describe('Tag', () => {
+  describe('commit and exists', () => {
+    it('asks for the commit the tag peels to', async () => {
+      const { repository, run } = repositoryThat(`${SHA}\n`);
+      await expect(repository.tag('sub/v1.2.3').commit()).resolves.toBe(SHA);
+      expect(run).toHaveBeenCalledWith(
+        'git',
+        ['rev-parse', '-q', '--verify', 'refs/tags/sub/v1.2.3^{commit}'],
+        inRepo,
+      );
+    });
+
+    it('is undefined for a missing tag, which then does not exist', async () => {
+      const tag = repositoryThat(exitedWith(1)).repository.tag('v1.2.3');
+      await expect(tag.commit()).resolves.toBeUndefined();
+      await expect(tag.exists()).resolves.toBe(false);
+    });
+
+    it('reports an existing tag', async () => {
+      const tag = repositoryThat(SHA).repository.tag('v1.2.3');
+      await expect(tag.exists()).resolves.toBe(true);
+    });
+
+    it.each([
+      ['status 128', exitedWith(128)],
+      ['a missing program', missingProgram],
+    ])(
+      'rethrows %s instead of calling the tag missing',
+      async (_name, failure) => {
+        const tag = repositoryThat(failure).repository.tag('v1.2.3');
+        await expect(tag.commit()).rejects.toBe(failure);
+      },
+    );
+  });
+
+  describe('create and push', () => {
+    it('creates a tag with -- so a name is never an option, and returns it', async () => {
+      const { repository, run } = repositoryThat('');
+      const tag = repository.tag('sub/v1.2.3');
+      await expect(tag.create()).resolves.toBe(tag);
       expect(run).toHaveBeenCalledWith('git', ['tag', '--', 'sub/v1.2.3'], {
         cwd: '/repo',
       });
     });
 
-    it('pushes one tag ref to origin', () => {
-      const { git, run } = clientThat('');
-      git.pushTag('sub/v1.2.3');
+    it('pushes one tag ref to origin, and returns the tag', async () => {
+      const { repository, run } = repositoryThat('');
+      const tag = repository.tag('sub/v1.2.3');
+      await expect(tag.push()).resolves.toBe(tag);
       expect(run).toHaveBeenCalledWith(
         'git',
         ['push', 'origin', 'refs/tags/sub/v1.2.3'],
-        { cwd: '/repo' },
+        inRepo,
       );
     });
 
@@ -180,20 +213,22 @@ describe('GitClient', () => {
       ['a command substitution', '$(id)/v1.0.0'],
       ['quotes and backticks', '"a\'`b/v1.0.0'],
       ['spaces', 'a b/v1.0.0'],
-    ])('passes a tag with %s as a single argument', (_name, tag) => {
-      const { git, run } = clientThat('');
-      git.createTag(tag);
-      git.pushTag(tag);
+    ])('passes a tag with %s as a single argument', async (_name, name) => {
+      const { repository, run } = repositoryThat('');
+      const tag = repository.tag(name);
+      await tag.create();
+      await tag.push();
       expect(run.mock.calls.map(([, args]) => args.at(-1))).toEqual([
-        tag,
-        `refs/tags/${tag}`,
+        name,
+        `refs/tags/${name}`,
       ]);
     });
 
-    it('lets a failure propagate', () => {
+    it('lets a failure propagate', async () => {
       const failure = new Error('fatal: cannot lock ref');
-      expect(() => clientThat(failure).git.createTag('v1')).toThrow(failure);
-      expect(() => clientThat(failure).git.pushTag('v1')).toThrow(failure);
+      const tag = repositoryThat(failure).repository.tag('v1');
+      await expect(tag.create()).rejects.toBe(failure);
+      await expect(tag.push()).rejects.toBe(failure);
     });
   });
 });

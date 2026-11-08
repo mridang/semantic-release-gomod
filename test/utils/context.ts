@@ -4,8 +4,8 @@ import type {
   PublishContext,
   VerifyConditionsContext,
 } from 'semantic-release';
-import { GitClient } from '../../src/git.js';
-import type { Run } from '../../src/utils/exec.js';
+import { GitRepository } from '../../src/git.js';
+import type { Runner } from '../../src/utils/exec.js';
 import type { GomodPluginConfig } from '../../src/plugin-config.js';
 import { recordingLogger } from './logger.js';
 
@@ -34,15 +34,15 @@ export const HEAD = '0123456789abcdef0123456789abcdef01234567';
  * @param behaviour Called with each other command (program and arguments joined by spaces), and may throw to fail it.
  * @param existingTags Tags that already exist, each with the commit it points at.
  * @param remoteTags Tags on the remote, each with the commit it points at.
- * @returns A mock usable wherever an `Run` is expected.
+ * @returns A mock usable wherever an `Runner` is expected.
  */
 export function mockExec(
   behaviour: (cmd: string) => void = () => undefined,
   existingTags: Readonly<Record<string, string>> = {},
   remoteTags: Readonly<Record<string, string>> = {},
-): jest.Mock<Run> {
+): jest.Mock<Runner> {
   const lookup = 'git rev-parse -q --verify refs/tags/';
-  return jest.fn<Run>((file, args) => {
+  return jest.fn<Runner>(async (file, args) => {
     const cmd = [file, ...args].join(' ');
     if (cmd === 'git rev-parse HEAD') return HEAD;
     if (cmd === 'git ls-remote --tags origin') {
@@ -64,13 +64,13 @@ export function mockExec(
 }
 
 /**
- * A git client for a repository at `/repo` that runs through a fake runner.
+ * A repository at `/repo` whose programs run through a fake runner.
  *
  * @param run The fake runner, usually from `mockExec`.
- * @returns The client.
+ * @returns The repository.
  */
-export function gitWith(run: Run): GitClient {
-  return new GitClient({ cwd: '/repo', run });
+export function repoWith(run: Runner): GitRepository {
+  return GitRepository.open({ cwd: '/repo', run });
 }
 
 /**
@@ -79,7 +79,7 @@ export function gitWith(run: Run): GitClient {
  * @param exec A mock made by `mockExec`.
  * @returns The program and arguments of each call, joined by spaces.
  */
-export function commandsOf(exec: jest.Mock<Run>): readonly string[] {
+export function commandsOf(exec: jest.Mock<Runner>): readonly string[] {
   return exec.mock.calls.map(([file, args]) => [file, ...args].join(' '));
 }
 

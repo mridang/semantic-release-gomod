@@ -1,4 +1,4 @@
-import { isRecord, numberAt, stringAt } from './object.js';
+import { isRecord, stringAt } from './object.js';
 
 /**
  * The message of anything that was thrown. Errors with an empty message, such
@@ -27,7 +27,8 @@ export function messageOf(error: unknown): string {
 }
 
 /**
- * The `code` of anything that was thrown, such as a `SemanticReleaseError`.
+ * The `code` of anything that was thrown, such as a `SemanticReleaseError`
+ * or a Node system error (`ENOENT`).
  *
  * @param error A caught value.
  * @returns Its string `code`, or undefined when it has none.
@@ -37,18 +38,19 @@ export function codeOf(error: unknown): string | undefined {
 }
 
 /**
- * The exit `status` of a failed child process.
+ * The exit `status` of anything that was thrown by a child process.
  *
  * @param error A caught value.
- * @returns Its numeric `status`, or undefined when it has none (a process
- * killed by a signal has a `null` status).
+ * @returns Its numeric `status`, or undefined when it has none.
  */
 export function statusOf(error: unknown): number | undefined {
-  return isRecord(error) ? numberAt(error, 'status') : undefined;
+  return isRecord(error) && typeof error.status === 'number'
+    ? error.status
+    : undefined;
 }
 
 /**
- * The `signal` that killed a child process.
+ * The terminating `signal` of anything that was thrown by a child process.
  *
  * @param error A caught value.
  * @returns Its string `signal`, or undefined when it has none.
