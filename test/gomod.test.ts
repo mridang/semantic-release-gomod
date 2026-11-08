@@ -439,8 +439,35 @@ describe('readModulePath', () => {
 
   it.each([
     ['a grouped declaration', 'module (\n\t"github.com/example/q"\n)\n'],
+    [
+      'a grouped declaration on one line',
+      'module ( "github.com/example/q" )\n',
+    ],
+    ['a grouped declaration without a space', 'module(\n"x"\n)\n'],
+  ])('says it cannot read %s', async (_name, content) => {
+    await withTmp({ 'go.mod': content }, async (dir) => {
+      expect(() => readModulePath(join(dir, 'go.mod'))).toThrow(
+        /Grouped module declarations .* are not supported/,
+      );
+    });
+  });
+
+  it.each([
+    ['an unterminated double quote', 'module "github.com/example/q\n'],
+    ['an unterminated raw quote', 'module `github.com/example/q\n'],
+    ['mismatched quotes', 'module "github.com/example/q`\n'],
+  ])('refuses %s', async (_name, content) => {
+    await withTmp({ 'go.mod': content }, async (dir) => {
+      expect(() => readModulePath(join(dir, 'go.mod'))).toThrow(
+        /Unterminated quote/,
+      );
+    });
+  });
+
+  it.each([
     ['an empty declaration', 'module\n'],
-  ])('throws for %s, which it cannot read', async (_name, content) => {
+    ['a word that only starts with module', 'modules github.com/x\n'],
+  ])('throws for %s', async (_name, content) => {
     await withTmp({ 'go.mod': content }, async (dir) => {
       expect(() => readModulePath(join(dir, 'go.mod'))).toThrow(
         /No module declaration found/,

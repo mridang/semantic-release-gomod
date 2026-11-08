@@ -222,22 +222,34 @@ function matchParts(
  *
  * @param goModPath Absolute path to the go.mod file.
  * @returns The module import path, e.g. `"github.com/mridang/wilhelm"`.
- * @throws Error if no `module` line is found.
+ * @throws Error if no `module` line is found, if it uses the grouped
+ * `module (` form, or if its quote is not closed.
  */
 export function readModulePath(goModPath: string): string {
   const content = fs.readFileSync(goModPath, 'utf8');
-  const declared = content
+  const line = content
     .split('\n')
-    .map((line) =>
-      /^\uFEFF?module\s+([^\s(]\S*)/
-        .exec(line)?.[1]
-        ?.replace(/^(["`])(.*)\1$/, '$2'),
-    )
-    .find((name) => name !== undefined);
-  if (declared === undefined) {
+    .find((candidate) => /^\uFEFF?module(?:\s|\(|$)/.test(candidate));
+  if (line === undefined) {
     throw new Error(`No module declaration found in ${goModPath}`);
   }
-  return declared;
+  if (/^\uFEFF?module\s*\(/.test(line)) {
+    throw new Error(
+      `Grouped module declarations ("module (") are not supported, found in ${goModPath}`,
+    );
+  }
+  const token = /^\uFEFF?module\s+(\S+)/.exec(line)?.[1];
+  if (token === undefined) {
+    throw new Error(`No module declaration found in ${goModPath}`);
+  }
+  const quoted = /^(["`])(.*)\1$/.exec(token);
+  if (quoted) return quoted[2];
+  if (/^["`]/.test(token)) {
+    throw new Error(
+      `Unterminated quote in the module declaration in ${goModPath}`,
+    );
+  }
+  return token;
 }
 
 /**
