@@ -15,6 +15,9 @@ const IGNORED_DIRS: readonly string[] = ['vendor', 'node_modules'];
 
 /**
  * Read a directory, returning an empty array on any I/O error.
+ *
+ * @param dir Absolute path of the directory.
+ * @returns Its entries, or an empty array when it cannot be read.
  */
 function safeReadDir(dir: string): readonly fs.Dirent[] {
   try {
@@ -68,7 +71,12 @@ function isSubmoduleGoMod(root: string, goModPath: string): boolean {
 }
 
 /**
- * Recursively walk `dir` and return absolute paths of all go.mod files.
+ * Recursively walk `dir` and return absolute paths of all go.mod files,
+ * skipping `vendor` and `node_modules`. Only regular files count, so a
+ * symlink named go.mod is ignored.
+ *
+ * @param dir Absolute path of the directory to walk.
+ * @returns Every go.mod file below it, including one directly inside it.
  */
 function walkForGoMods(dir: string): readonly string[] {
   return safeReadDir(dir).flatMap((entry) => {
@@ -84,11 +92,24 @@ function walkForGoMods(dir: string): readonly string[] {
  * Minimal glob expander supporting `**` as a recursive wildcard.
  * Only handles the patterns this plugin actually uses, e.g.
  * `"assert/**\/go.mod"` or `"env/*\/go.mod"`.
+ *
+ * @param root    Absolute path the pattern is relative to.
+ * @param pattern Glob pattern using `/` separators.
+ * @returns Absolute paths of the files the pattern matches.
  */
 function expandGlob(root: string, pattern: string): readonly string[] {
   return matchParts(root, pattern.split('/'));
 }
 
+/**
+ * Match the remaining segments of a glob pattern below a directory.
+ * `**` matches zero or more directory levels, `*` exactly one, and any other
+ * segment is a literal name. The last segment must be a regular file.
+ *
+ * @param dir   Absolute path of the directory to match in.
+ * @param parts Pattern segments still to be matched.
+ * @returns Absolute paths of the matching files.
+ */
 function matchParts(dir: string, parts: readonly string[]): readonly string[] {
   if (parts.length === 0) return [];
   const [head, ...tail] = parts;
