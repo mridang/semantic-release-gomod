@@ -12,6 +12,7 @@ import {
   createAndPushTag,
   deriveTagPrefix,
   discoverSubmoduleGoMods,
+  planTags,
   readModulePath,
   updateGoModRequires,
 } from './gomod.js';
@@ -155,10 +156,14 @@ export async function publish(
     ...submodules,
   ];
 
-  for (const goModPath of allGoMods) {
+  const tags = allGoMods.map((goModPath) => {
     const prefix = deriveTagPrefix(goModPath, cwd);
-    const tag = prefix ? `${prefix}/v${version}` : `v${version}`;
-    createAndPushTag(cwd, tag, config.pushTags, logger, exec);
+    return prefix ? `${prefix}/v${version}` : `v${version}`;
+  });
+  // Validate every tag before the first one is created or pushed.
+  const plans = planTags(cwd, tags, exec);
+  for (const plan of plans) {
+    createAndPushTag(cwd, plan, config.pushTags, logger, exec);
   }
 
   logger.log('Tagged %d module(s) at v%s.', allGoMods.length, version);

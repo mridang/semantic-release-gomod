@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import plugin, { prepare, publish, verifyConditions } from '../src/index.js';
 import {
   commandsOf,
+  HEAD,
   mockExec,
   rawConfig,
   stepContext,
@@ -129,7 +130,7 @@ describe('steps without a cwd in the context', () => {
     await publish({}, { ...noCwd.publish, cwd: undefined }, exec);
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['tag', 'v1.2.3'],
+      ['tag', '--', 'v1.2.3'],
       expect.objectContaining({ cwd: process.cwd() }),
     );
   });
@@ -309,6 +310,69 @@ describe('publish with hostile directory names', () => {
   );
 });
 
+describe('publish in a real repository', () => {
+  const init = (dir: string): ((...args: readonly string[]) => string) => {
+    const git = (...args: readonly string[]): string =>
+      execFileSync(
+        'git',
+        [
+          '-C',
+          dir,
+          '-c',
+          'user.name=test',
+          '-c',
+          'user.email=t@e.com',
+          ...args,
+        ],
+        { encoding: 'utf8' },
+      );
+    git('init', '-q');
+    git('commit', '-q', '--allow-empty', '-m', 'one');
+    return git;
+  };
+
+  it('refuses a tag left at an older commit and creates no other tag', async () => {
+    await withTmp(
+      { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
+      async (dir) => {
+        const git = init(dir);
+        git('tag', 'sub/v1.2.3');
+        git('commit', '-q', '--allow-empty', '-m', 'two');
+        await expect(
+          publish({ pushTags: false }, stepContext(dir).publish),
+        ).rejects.toMatchObject({ code: 'ETAGMISMATCH' });
+        expect(git('tag', '--list').trim()).toBe('sub/v1.2.3');
+      },
+    );
+  });
+
+  it('treats an annotated tag at HEAD as already created', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      const git = init(dir);
+      git('tag', '-a', 'v1.2.3', '-m', 'release');
+      await expect(
+        publish({ pushTags: false }, stepContext(dir).publish),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  it.each([
+    ['a leading dash', '-dash'],
+    ['a space', 'a b'],
+  ])('creates no tag at all when a directory has %s', async (_name, name) => {
+    await withTmp(
+      { 'go.mod': goMod(ROOT), [`${name}/go.mod`]: goMod(`${ROOT}/x`) },
+      async (dir) => {
+        const git = init(dir);
+        await expect(
+          publish({ pushTags: false }, stepContext(dir).publish),
+        ).rejects.toMatchObject({ code: 'EINVALIDTAG' });
+        expect(git('tag', '--list').trim()).toBe('');
+      },
+    );
+  });
+});
+
 describe('publish with a mocked executor', () => {
   const files = {
     'go.mod': goMod(ROOT),
@@ -317,17 +381,24 @@ describe('publish with a mocked executor', () => {
   const commands = (exec: ReturnType<typeof mockExec>): readonly string[] =>
     commandsOf(exec);
 
-  it('creates and pushes tags for the root and every submodule', async () => {
+  const checks = [
+    'git check-ref-format refs/tags/v1.2.3',
+    'git check-ref-format refs/tags/pkg/foo/v1.2.3',
+    'git rev-parse HEAD',
+    'git rev-parse -q --verify refs/tags/v1.2.3^{commit}',
+    'git rev-parse -q --verify refs/tags/pkg/foo/v1.2.3^{commit}',
+  ];
+
+  it('validates every tag first, then creates and pushes each', async () => {
     await withTmp(files, async (dir) => {
       const exec = mockExec();
       const { publish: ctx, logger } = stepContext(dir);
       await publish({}, ctx, exec);
       expect(commands(exec)).toEqual([
-        'git rev-parse -q --verify refs/tags/v1.2.3',
-        'git tag v1.2.3',
+        ...checks,
+        'git tag -- v1.2.3',
         'git push origin refs/tags/v1.2.3',
-        'git rev-parse -q --verify refs/tags/pkg/foo/v1.2.3',
-        'git tag pkg/foo/v1.2.3',
+        'git tag -- pkg/foo/v1.2.3',
         'git push origin refs/tags/pkg/foo/v1.2.3',
       ]);
       expect(logger.log).toHaveBeenCalledWith(
@@ -342,24 +413,55 @@ describe('publish with a mocked executor', () => {
     await withTmp(files, async (dir) => {
       const exec = mockExec();
       await publish({ pushTags: false }, stepContext(dir).publish, exec);
-      expect(commands(exec).filter((cmd) => cmd.startsWith('git tag'))).toEqual(
-        ['git tag v1.2.3', 'git tag pkg/foo/v1.2.3'],
-      );
-      expect(commands(exec).some((cmd) => cmd.includes('push'))).toBe(false);
+      expect(commands(exec).slice(checks.length)).toEqual([
+        'git tag -- v1.2.3',
+        'git tag -- pkg/foo/v1.2.3',
+      ]);
     });
   });
 
-  it('skips tags that already exist and still pushes', async () => {
+  it('skips tags that already exist at HEAD and still pushes', async () => {
     await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
-      const exec = mockExec(() => undefined, ['v1.2.3']);
+      const exec = mockExec(() => undefined, { 'v1.2.3': HEAD });
       await expect(
         publish({}, stepContext(dir).publish, exec),
       ).resolves.toBeUndefined();
-      expect(commands(exec)).toEqual([
-        'git rev-parse -q --verify refs/tags/v1.2.3',
+      expect(commands(exec).slice(-1)).toEqual([
         'git push origin refs/tags/v1.2.3',
       ]);
+      expect(commands(exec).some((cmd) => cmd.startsWith('git tag'))).toBe(
+        false,
+      );
     });
+  });
+
+  it('pushes nothing when any tag exists at another commit', async () => {
+    await withTmp(files, async (dir) => {
+      const exec = mockExec(() => undefined, {
+        'pkg/foo/v1.2.3': 'f'.repeat(40),
+      });
+      await expect(
+        publish({}, stepContext(dir).publish, exec),
+      ).rejects.toMatchObject({ code: 'ETAGMISMATCH' });
+      expect(
+        commands(exec).filter((cmd) => /^git (tag|push)/.test(cmd)),
+      ).toEqual([]);
+    });
+  });
+
+  it('pushes nothing when a tag name is invalid', async () => {
+    await withTmp(
+      { 'go.mod': goMod(ROOT), '-dash/go.mod': goMod(`${ROOT}/dash`) },
+      async (dir) => {
+        const exec = mockExec();
+        await expect(
+          publish({}, stepContext(dir).publish, exec),
+        ).rejects.toMatchObject({ code: 'EINVALIDTAG' });
+        expect(
+          commands(exec).filter((cmd) => /^git (tag|push)/.test(cmd)),
+        ).toEqual([]);
+      },
+    );
   });
 
   it('rethrows unexpected tag errors', async () => {

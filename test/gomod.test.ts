@@ -3,12 +3,13 @@ import { readFile, symlink } from 'node:fs/promises';
 import path, { join } from 'node:path';
 import {
   createAndPushTag,
+  planTags,
   deriveTagPrefix,
   discoverSubmoduleGoMods,
   readModulePath,
   updateGoModRequires,
 } from '../src/gomod.js';
-import { commandsOf, mockExec, mockLogger } from './utils/context.js';
+import { commandsOf, HEAD, mockExec, mockLogger } from './utils/context.js';
 import { goMod } from './utils/go-mod.js';
 import { withTmp } from './utils/tmpdir.js';
 
@@ -522,17 +523,85 @@ describe('deriveTagPrefix', () => {
   });
 });
 
+describe('planTags', () => {
+  const OTHER = 'fedcba9876543210fedcba9876543210fedcba98';
+
+  it('marks tags by whether they already exist at HEAD', () => {
+    const exec = mockExec(() => undefined, { 'a/v1.0.0': HEAD });
+    expect(planTags('/repo', ['a/v1.0.0', 'b/v1.0.0'], exec)).toEqual([
+      { tag: 'a/v1.0.0', exists: true },
+      { tag: 'b/v1.0.0', exists: false },
+    ]);
+  });
+
+  it('checks the names, then HEAD, then each tag, and creates nothing', () => {
+    const exec = mockExec();
+    planTags('/repo', ['v1.0.0', 'a/v1.0.0'], exec);
+    expect(commandsOf(exec)).toEqual([
+      'git check-ref-format refs/tags/v1.0.0',
+      'git check-ref-format refs/tags/a/v1.0.0',
+      'git rev-parse HEAD',
+      'git rev-parse -q --verify refs/tags/v1.0.0^{commit}',
+      'git rev-parse -q --verify refs/tags/a/v1.0.0^{commit}',
+    ]);
+  });
+
+  it('refuses a tag that exists at another commit than HEAD', () => {
+    const exec = mockExec(() => undefined, { 'a/v1.0.0': OTHER });
+    expect(() => planTags('/repo', ['v1.0.0', 'a/v1.0.0'], exec)).toThrow(
+      expect.objectContaining({
+        code: 'ETAGMISMATCH',
+        message: expect.stringContaining(`a/v1.0.0 (${OTHER})`),
+      }),
+    );
+  });
+
+  it('lists every stale tag in one error', () => {
+    const exec = mockExec(() => undefined, {
+      'a/v1.0.0': OTHER,
+      'b/v1.0.0': OTHER,
+    });
+    expect(() => planTags('/repo', ['a/v1.0.0', 'b/v1.0.0'], exec)).toThrow(
+      /a\/v1\.0\.0 .*b\/v1\.0\.0/,
+    );
+  });
+
+  it('refuses a name git rejects before it looks at any tag', () => {
+    const exec = mockExec((cmd) => {
+      if (cmd.endsWith('refs/tags/bad name/v1.0.0')) throw new Error('invalid');
+    });
+    expect(() =>
+      planTags('/repo', ['v1.0.0', 'bad name/v1.0.0'], exec),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'EINVALIDTAG',
+        message: expect.stringContaining('bad name/v1.0.0'),
+      }),
+    );
+    expect(commandsOf(exec).some((cmd) => cmd.includes('--verify'))).toBe(
+      false,
+    );
+  });
+
+  it('refuses a tag starting with a dash without asking git', () => {
+    const exec = mockExec();
+    expect(() => planTags('/repo', ['-dash/v1.0.0'], exec)).toThrow(
+      expect.objectContaining({ code: 'EINVALIDTAG' }),
+    );
+    expect(exec).not.toHaveBeenCalled();
+  });
+});
+
 describe('createAndPushTag', () => {
-  const verify = 'git rev-parse -q --verify refs/tags/v1.2.3';
+  const options = { cwd: '/repo', stdio: 'pipe' };
+  const missing = { tag: 'v1.2.3', exists: false };
 
   it('creates and pushes the tag', () => {
     const exec = mockExec();
     const logger = mockLogger();
-    createAndPushTag('/repo', 'v1.2.3', true, logger, exec);
-    const options = { cwd: '/repo', stdio: 'pipe' };
+    createAndPushTag('/repo', missing, true, logger, exec);
     expect(exec.mock.calls).toEqual([
-      ['git', ['rev-parse', '-q', '--verify', 'refs/tags/v1.2.3'], options],
-      ['git', ['tag', 'v1.2.3'], options],
+      ['git', ['tag', '--', 'v1.2.3'], options],
       ['git', ['push', 'origin', 'refs/tags/v1.2.3'], options],
     ]);
     expect(logger.log).toHaveBeenCalledWith('Created tag %s', 'v1.2.3');
@@ -546,41 +615,43 @@ describe('createAndPushTag', () => {
     ['spaces', 'a b/v1.0.0'],
   ])('passes a tag with %s as one argument', (_name, tag) => {
     const exec = mockExec();
-    createAndPushTag('/repo', tag, true, mockLogger(), exec);
-    expect(exec.mock.calls.map(([file, args]) => [file, args.at(-1)])).toEqual([
-      ['git', `refs/tags/${tag}`],
-      ['git', tag],
-      ['git', `refs/tags/${tag}`],
+    createAndPushTag('/repo', { tag, exists: false }, true, mockLogger(), exec);
+    expect(exec.mock.calls.map(([file, args]) => [file, ...args])).toEqual([
+      ['git', 'tag', '--', tag],
+      ['git', 'push', 'origin', `refs/tags/${tag}`],
     ]);
   });
 
   it('only creates the tag when push is off', () => {
     const exec = mockExec();
-    createAndPushTag('/repo', 'v1.2.3', false, mockLogger(), exec);
-    expect(commandsOf(exec)).toEqual([verify, 'git tag v1.2.3']);
+    createAndPushTag('/repo', missing, false, mockLogger(), exec);
+    expect(commandsOf(exec)).toEqual(['git tag -- v1.2.3']);
   });
 
-  it('skips an existing tag, whatever language git speaks, and still pushes', () => {
-    const exec = mockExec(() => undefined, ['v1.2.3']);
+  it('skips a tag that exists at HEAD and still pushes', () => {
+    const exec = mockExec();
     const logger = mockLogger();
-    createAndPushTag('/repo', 'v1.2.3', true, logger, exec);
+    createAndPushTag(
+      '/repo',
+      { tag: 'v1.2.3', exists: true },
+      true,
+      logger,
+      exec,
+    );
     expect(logger.log).toHaveBeenCalledWith(
       'Tag %s already exists, skipping',
       'v1.2.3',
     );
-    expect(commandsOf(exec)).toEqual([
-      verify,
-      'git push origin refs/tags/v1.2.3',
-    ]);
+    expect(commandsOf(exec)).toEqual(['git push origin refs/tags/v1.2.3']);
   });
 
-  it('rethrows tag errors without pushing, even when they mention existing', () => {
+  it('rethrows tag errors without pushing', () => {
     const exec = mockExec((cmd) => {
-      if (cmd.startsWith('git tag')) throw new Error('tag already exists');
+      if (cmd.startsWith('git tag')) throw new Error('fatal: cannot lock ref');
     });
     expect(() =>
-      createAndPushTag('/repo', 'v1.2.3', true, mockLogger(), exec),
-    ).toThrow('tag already exists');
-    expect(exec).toHaveBeenCalledTimes(2);
+      createAndPushTag('/repo', missing, true, mockLogger(), exec),
+    ).toThrow('cannot lock ref');
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 });

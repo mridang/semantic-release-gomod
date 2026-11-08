@@ -14,14 +14,14 @@ import {
  * Accepting this as a parameter makes the callers unit-testable
  * without needing to mock Node.js built-in modules.
  *
- * Implementations must throw when the program exits with a non-zero
- * status. Callers are responsible for catching and handling failures.
+ * Implementations return what the program wrote to stdout, and must throw
+ * when it exits with a non-zero status. Callers are responsible for catching and handling failures.
  */
 export type ExecFn = (
   file: string,
   args: readonly string[],
-  opts?: ExecFileSyncOptions,
-) => void;
+  opts?: Omit<ExecFileSyncOptions, 'encoding'>,
+) => string;
 
 /**
  * The largest output, in bytes, a child process may write before it is
@@ -62,11 +62,16 @@ class ExecError extends Error {
  * @param file The program to run.
  * @param args Its arguments.
  * @param opts Options passed to `execFileSync`.
+ * @returns What the program wrote to stdout.
  * @throws Error when the program cannot be run or exits unsuccessfully.
  */
 export const defaultExec: ExecFn = (file, args, opts) => {
   try {
-    execFileSync(file, args, { maxBuffer: MAX_BUFFER, ...opts });
+    return execFileSync(file, args, {
+      maxBuffer: MAX_BUFFER,
+      ...opts,
+      encoding: 'utf8',
+    });
   } catch (err: unknown) {
     throw new ExecError(err);
   }

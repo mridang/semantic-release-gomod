@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import SemanticReleaseError from '@semantic-release/error';
 import type { VerifyConditionsContext } from 'semantic-release';
 import type { ExecFn } from './exec.js';
 
@@ -244,17 +245,28 @@ export function deriveTagPrefix(
 }
 
 /**
- * Whether a tag already exists locally. Asks git for the ref instead of
- * reading the text of its error message, which depends on the locale.
+ * A tag to create, and whether it already exists on the commit being released.
+ */
+export interface TagPlan {
+  /** The full tag, e.g. `"assert/cert/manager/v1.2.3"`. */
+  readonly tag: string;
+  /** True when the tag already points at `HEAD`, so it need not be created. */
+  readonly exists: boolean;
+}
+
+/**
+ * Whether git accepts a tag name. A name starting with `-` is refused too,
+ * since git would read it as an option.
  *
  * @param repoRoot Absolute path to the repository root.
- * @param tag      Full tag string, e.g. `"assert/cert/manager/v1.2.3"`.
+ * @param tag      Full tag string.
  * @param exec     Command executor (injectable for testing).
- * @returns True when `refs/tags/<tag>` resolves.
+ * @returns True when `git check-ref-format` accepts `refs/tags/<tag>`.
  */
-function tagExists(repoRoot: string, tag: string, exec: ExecFn): boolean {
+function isValidTagName(repoRoot: string, tag: string, exec: ExecFn): boolean {
+  if (tag.startsWith('-')) return false;
   try {
-    exec('git', ['rev-parse', '-q', '--verify', `refs/tags/${tag}`], {
+    exec('git', ['check-ref-format', `refs/tags/${tag}`], {
       cwd: repoRoot,
       stdio: 'pipe',
     });
@@ -265,27 +277,102 @@ function tagExists(repoRoot: string, tag: string, exec: ExecFn): boolean {
 }
 
 /**
- * Create a git tag locally and optionally push it to origin.
- * Silently skips a tag that already exists so the plugin can be called
- * idempotently.
+ * The commit a tag already points at. Asks git for the ref instead of
+ * reading the text of its error message, which depends on the locale.
  *
  * @param repoRoot Absolute path to the repository root.
- * @param tag      Full tag string, e.g. `"assert/cert/manager/v1.2.3"`.
+ * @param tag      Full tag string.
+ * @param exec     Command executor (injectable for testing).
+ * @returns The commit hash, or undefined when the tag does not exist.
+ */
+function tagCommit(
+  repoRoot: string,
+  tag: string,
+  exec: ExecFn,
+): string | undefined {
+  try {
+    return exec(
+      'git',
+      ['rev-parse', '-q', '--verify', `refs/tags/${tag}^{commit}`],
+      { cwd: repoRoot, stdio: 'pipe' },
+    ).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Check every tag before any of them is created or pushed, so a bad one
+ * cannot leave a release half published. A tag name git would refuse, or an
+ * existing tag that points at a different commit than `HEAD` (which would
+ * publish stale code under the new version), stops the release.
+ *
+ * @param repoRoot Absolute path to the repository root.
+ * @param tags     Every full tag the release will create.
+ * @param exec     Command executor (injectable for testing).
+ * @returns For each tag, whether it already exists at `HEAD`.
+ * @throws SemanticReleaseError `EINVALIDTAG` or `ETAGMISMATCH`.
+ */
+export function planTags(
+  repoRoot: string,
+  tags: readonly string[],
+  exec: ExecFn,
+): readonly TagPlan[] {
+  const invalid = tags.filter((tag) => !isValidTagName(repoRoot, tag, exec));
+  if (invalid.length > 0) {
+    throw new SemanticReleaseError(
+      `Cannot create tag(s) git rejects: ${invalid.join(', ')}.`,
+      'EINVALIDTAG',
+      'A tag is the module directory plus the version, so rename the directory (tag names cannot contain spaces, `~`, `^`, `:`, `?`, `*`, `[`, `\\` or `..`, and cannot start with `-`), or exclude it with the `modules` option.',
+    );
+  }
+  const head = exec('git', ['rev-parse', 'HEAD'], {
+    cwd: repoRoot,
+    stdio: 'pipe',
+  }).trim();
+  const plans = tags.map((tag) => ({
+    tag,
+    commit: tagCommit(repoRoot, tag, exec),
+  }));
+  const stale = plans.filter(
+    ({ commit }) => commit !== undefined && commit !== head,
+  );
+  if (stale.length > 0) {
+    throw new SemanticReleaseError(
+      `Tag(s) already exist at another commit than HEAD (${head}): ${stale.map(({ tag, commit }) => `${tag} (${commit})`).join(', ')}.`,
+      'ETAGMISMATCH',
+      'Pushing them would publish old code under this version. Delete the stale tag(s) locally (`git tag -d <tag>`) and on the remote if they were pushed, or release a new version.',
+    );
+  }
+  return plans.map(({ tag, commit }) => ({
+    tag,
+    exists: commit !== undefined,
+  }));
+}
+
+/**
+ * Create a git tag locally and optionally push it to origin. A tag that
+ * already points at `HEAD` is not created again, so the plugin can be called
+ * idempotently. Use `planTags` first to validate the whole batch.
+ *
+ * @param repoRoot Absolute path to the repository root.
+ * @param plan     The tag, and whether it already exists at `HEAD`.
  * @param push     When true, push the tag to `origin`.
  * @param logger   semantic-release logger.
  * @param exec     Command executor (injectable for testing).
  */
 export function createAndPushTag(
   repoRoot: string,
-  tag: string,
+  plan: TagPlan,
   push: boolean,
   logger: Logger,
   exec: ExecFn,
 ): void {
-  if (tagExists(repoRoot, tag, exec)) {
+  const { tag } = plan;
+  if (plan.exists) {
     logger.log('Tag %s already exists, skipping', tag);
   } else {
-    exec('git', ['tag', tag], { cwd: repoRoot, stdio: 'pipe' });
+    exec('git', ['tag', '--', tag], { cwd: repoRoot, stdio: 'pipe' });
     logger.log('Created tag %s', tag);
   }
 

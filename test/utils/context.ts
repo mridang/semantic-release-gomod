@@ -21,23 +21,37 @@ export function mockLogger(): {
 }
 
 /**
- * A command executor that records its calls and optionally fails. Looking a
- * tag up with `git rev-parse` succeeds only for the tags that already exist.
+ * The commit `HEAD` points at in repositories simulated by `mockExec`.
+ */
+export const HEAD = '0123456789abcdef0123456789abcdef01234567';
+
+/**
+ * A command executor that records its calls and optionally fails. It answers
+ * the git queries the plugin makes: `HEAD` is `HEAD`, and a tag lookup
+ * succeeds only for the tags that already exist.
  *
  * @param behaviour Called with each other command (program and arguments joined by spaces), and may throw to fail it.
- * @param existingTags Tags that already exist in the repository.
+ * @param existingTags Tags that already exist, each with the commit it points at.
  * @returns A mock usable wherever an `ExecFn` is expected.
  */
 export function mockExec(
   behaviour: (cmd: string) => void = () => undefined,
-  existingTags: readonly string[] = [],
+  existingTags: Readonly<Record<string, string>> = {},
 ): jest.Mock<ExecFn> {
+  const lookup = 'git rev-parse -q --verify refs/tags/';
   return jest.fn<ExecFn>((file, args) => {
     const cmd = [file, ...args].join(' ');
-    if (!cmd.startsWith('git rev-parse')) return behaviour(cmd);
-    if (!existingTags.some((tag) => cmd.endsWith(` refs/tags/${tag}`))) {
-      throw new Error('fatal: no such tag');
+    if (cmd === 'git rev-parse HEAD') return HEAD;
+    if (cmd.startsWith(lookup)) {
+      const tag = cmd.slice(lookup.length).replace(/\^\{commit\}$/, '');
+      const commit = Object.hasOwn(existingTags, tag)
+        ? existingTags[tag]
+        : undefined;
+      if (commit === undefined) throw new Error('fatal: no such tag');
+      return commit;
     }
+    behaviour(cmd);
+    return '';
   });
 }
 

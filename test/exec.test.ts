@@ -1,7 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
 import { defaultExec } from '../src/exec.js';
 
-const node = (code: string): void =>
+const node = (code: string): string =>
   defaultExec('node', ['-e', code], { stdio: 'pipe' });
 
 describe('defaultExec', () => {
@@ -19,23 +19,25 @@ describe('defaultExec', () => {
     expect(() => defaultExec('no-such-program-gomod', [])).toThrow(/ENOENT/);
   });
 
-  it('passes arguments without a shell', () => {
-    expect(() =>
-      node('if (process.argv.length !== 1) process.exit(1)'),
-    ).not.toThrow();
-    expect(() =>
-      defaultExec(
-        'node',
-        [
-          '-e',
-          'process.exit(process.argv[1] === "a;b $(c)" ? 0 : 1)',
-          'a;b $(c)',
-        ],
-        {
-          stdio: 'pipe',
-        },
-      ),
-    ).not.toThrow();
+  it('returns what the program wrote to stdout', () => {
+    expect(node('process.stdout.write("hello")')).toBe('hello');
+  });
+
+  it.each([
+    ['a semicolon and a substitution', 'a;touch${IFS}x $(id) b'],
+    ['quotes and backticks', '"a\'`b`'],
+    ['spaces and a glob', 'a b *'],
+  ])('passes %s through unchanged, as one argument', (_name, value) => {
+    const echoed = defaultExec(
+      'node',
+      [
+        '-e',
+        'process.stdout.write(JSON.stringify(process.argv.slice(1)))',
+        value,
+      ],
+      { stdio: 'pipe' },
+    );
+    expect(JSON.parse(echoed)).toEqual([value]);
   });
 
   it('accepts output larger than the default buffer', () => {
