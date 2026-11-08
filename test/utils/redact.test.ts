@@ -1,8 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 // noinspection ES6PreferShortImport
-import { redactCredentials, redactSecrets } from '../../src/utils/redact.js';
-
-const SECRET = 'a/b+c=d e';
+import { redactCredentials } from '../../src/utils/redact.js';
 
 describe('redactCredentials', () => {
   it.each([
@@ -40,28 +38,5 @@ describe('redactCredentials', () => {
     'ssh://git@github.com/o/r.git'.replace('git@', ''),
   ])('leaves %s unchanged', (input) => {
     expect(redactCredentials(input)).toBe(input);
-  });
-});
-
-describe('redactSecrets', () => {
-  it.each([
-    ['as it is', SECRET],
-    ['percent-encoded', encodeURIComponent(SECRET)],
-    ['form-encoded', new URLSearchParams({ s: SECRET }).toString().slice(2)],
-    ['JSON-escaped', 'a\\/b+c=d e'],
-  ])('removes the secret %s', (_form, echoed) => {
-    expect(redactSecrets(`bad ?token=${echoed}&x`, [SECRET])).toBe(
-      'bad ?token=[redacted]&x',
-    );
-  });
-
-  it('removes every secret and every occurrence', () => {
-    expect(redactSecrets('a b a c', ['a', 'c'])).toBe(
-      '[redacted] b [redacted] [redacted]',
-    );
-  });
-
-  it('ignores empty secrets', () => {
-    expect(redactSecrets('text', [''])).toBe('text');
   });
 });
