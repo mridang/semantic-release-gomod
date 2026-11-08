@@ -96,6 +96,42 @@ function resolveFlag(name: string, value: unknown, fallback: boolean): boolean {
 }
 
 /**
+ * Whether a glob pattern uses only what the matcher supports: literal names,
+ * and `*` or `**` as a whole segment, without leaving the repository.
+ *
+ * @param pattern A glob pattern using `/` separators.
+ * @returns True when every segment is supported.
+ */
+function isSupportedPattern(pattern: string): boolean {
+  return pattern
+    .split('/')
+    .every(
+      (segment) =>
+        segment !== '..' &&
+        (segment === '*' || segment === '**' || !/[*?[\]{}]/.test(segment)),
+    );
+}
+
+/**
+ * Reject glob patterns the matcher would silently treat as literal names.
+ *
+ * @param patterns The glob patterns.
+ * @returns The same patterns.
+ * @throws SemanticReleaseError `EINVALIDMODULES` listing the unsupported ones.
+ */
+function checkPatterns(patterns: readonly string[]): readonly string[] {
+  const unsupported = patterns.filter((p) => !isSupportedPattern(p));
+  if (unsupported.length > 0) {
+    throw new SemanticReleaseError(
+      `Option 'modules' has unsupported glob pattern(s): ${unsupported.join(', ')}.`,
+      'EINVALIDMODULES',
+      'Only literal names and whole-segment `*` and `**` wildcards are supported (for example "assert/**/go.mod" or "services/*/go.mod"), and a pattern must not use `..` to leave the repository. `?`, `[...]`, `{a,b}` and partial wildcards such as "svc-*" are not supported.',
+    );
+  }
+  return patterns;
+}
+
+/**
  * Check and normalise the `modules` option.
  *
  * @param modules The raw option value.
@@ -105,12 +141,12 @@ function resolveFlag(name: string, value: unknown, fallback: boolean): boolean {
 function resolveModules(modules: unknown): readonly string[] | undefined {
   // Any falsy value (undefined, null, false, 0, '') means "not configured".
   if (!modules) return undefined;
-  if (typeof modules === 'string') return [modules];
+  if (typeof modules === 'string') return checkPatterns([modules]);
   if (
     Array.isArray(modules) &&
     modules.every((pattern): pattern is string => typeof pattern === 'string')
   ) {
-    return modules;
+    return checkPatterns(modules);
   }
   throw new SemanticReleaseError(
     "Option 'modules' must be a glob string or an array of glob strings.",

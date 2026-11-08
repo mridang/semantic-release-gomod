@@ -52,6 +52,34 @@ describe('resolveConfig', () => {
     );
   });
 
+  it.each([
+    ['a partial-segment wildcard', 'svc-*/go.mod'],
+    ['a single-character wildcard', 'svc-?/go.mod'],
+    ['a brace list', '{a,b}/go.mod'],
+    ['a character class', 'svc-[ab]/go.mod'],
+    ['a double star inside a name', 'a**/go.mod'],
+    ['a path that leaves the repository', '../other/go.mod'],
+    ['a path that climbs out in the middle', 'a/../../go.mod'],
+  ])('rejects %s', (_name, pattern) => {
+    expect(() => resolveConfig(rawConfig({ modules: [pattern] }))).toThrow(
+      expect.objectContaining({
+        code: 'EINVALIDMODULES',
+        message: expect.stringContaining(pattern),
+      }),
+    );
+  });
+
+  it.each([
+    ['assert/**/go.mod'],
+    ['*/go.mod'],
+    ['pkg/*/sub/go.mod'],
+    ['**/go.mod'],
+    ['vendor/x/go.mod'],
+    ['sub.dir/go.mod'],
+  ])('accepts the supported pattern %s', (pattern) => {
+    expect(resolveConfig({ modules: pattern }).modules).toEqual([pattern]);
+  });
+
   it('keeps false as a real value for the boolean options', () => {
     expect(resolveConfig({ pushTags: false, skipGoModTidy: false })).toEqual({
       modules: undefined,
