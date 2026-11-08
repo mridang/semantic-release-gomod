@@ -4,7 +4,8 @@ import type {
   PublishContext,
   VerifyConditionsContext,
 } from 'semantic-release';
-import type { ExecFn } from '../../src/exec.js';
+import { GitClient } from '../../src/git.js';
+import type { Run } from '../../src/utils/exec.js';
 import type { GomodPluginConfig } from '../../src/plugin-config.js';
 import { recordingLogger } from './logger.js';
 
@@ -33,15 +34,15 @@ export const HEAD = '0123456789abcdef0123456789abcdef01234567';
  * @param behaviour Called with each other command (program and arguments joined by spaces), and may throw to fail it.
  * @param existingTags Tags that already exist, each with the commit it points at.
  * @param remoteTags Tags on the remote, each with the commit it points at.
- * @returns A mock usable wherever an `ExecFn` is expected.
+ * @returns A mock usable wherever an `Run` is expected.
  */
 export function mockExec(
   behaviour: (cmd: string) => void = () => undefined,
   existingTags: Readonly<Record<string, string>> = {},
   remoteTags: Readonly<Record<string, string>> = {},
-): jest.Mock<ExecFn> {
+): jest.Mock<Run> {
   const lookup = 'git rev-parse -q --verify refs/tags/';
-  return jest.fn<ExecFn>((file, args) => {
+  return jest.fn<Run>((file, args) => {
     const cmd = [file, ...args].join(' ');
     if (cmd === 'git rev-parse HEAD') return HEAD;
     if (cmd === 'git ls-remote --tags origin') {
@@ -63,12 +64,22 @@ export function mockExec(
 }
 
 /**
+ * A git client for a repository at `/repo` that runs through a fake runner.
+ *
+ * @param run The fake runner, usually from `mockExec`.
+ * @returns The client.
+ */
+export function gitWith(run: Run): GitClient {
+  return new GitClient({ cwd: '/repo', run });
+}
+
+/**
  * The commands an executor was asked to run, each as one string.
  *
  * @param exec A mock made by `mockExec`.
  * @returns The program and arguments of each call, joined by spaces.
  */
-export function commandsOf(exec: jest.Mock<ExecFn>): readonly string[] {
+export function commandsOf(exec: jest.Mock<Run>): readonly string[] {
   return exec.mock.calls.map(([file, args]) => [file, ...args].join(' '));
 }
 

@@ -31,7 +31,7 @@ describe('verifyConditions', () => {
         verifyConditions({}, stepContext(dir).verify, exec),
       ).resolves.toBeUndefined();
       expect(exec).toHaveBeenCalledWith('git', ['--version'], {
-        stdio: 'pipe',
+        cwd: dir,
       });
     });
   });
@@ -233,7 +233,6 @@ describe('prepare', () => {
       await prepare({}, ctx, exec);
       expect(exec).toHaveBeenCalledWith('go', ['mod', 'tidy'], {
         cwd: join(dir, 'sub'),
-        stdio: 'pipe',
       });
       expect(lines).toContain('go mod tidy OK in %s sub');
       expect(lines).toContain('Prepared %d submodule(s) for v%s. 1 2.0.0');

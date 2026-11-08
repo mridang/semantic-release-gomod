@@ -6,7 +6,9 @@ import type {
   VerifyConditionsContext,
 } from 'semantic-release';
 import SemanticReleaseError from '@semantic-release/error';
-import { defaultExec, type ExecFn } from './exec.js';
+import { GitClient } from './git.js';
+import { GoClient } from './go.js';
+import { run, type Run } from './utils/exec.js';
 import {
   cwdOf,
   resolveConfig,
@@ -35,12 +37,12 @@ import { redactCredentials } from './utils/redact.js';
  *
  * @param pluginConfig The plugin configuration.
  * @param context      The semantic-release context.
- * @param exec         Command executor (injectable for testing).
+ * @param runner       Program runner (injectable for testing).
  */
 export async function verifyConditions(
   pluginConfig: GomodPluginConfig,
   context: VerifyConditionsContext,
-  exec: ExecFn = defaultExec,
+  runner: Run = run,
 ): Promise<void> {
   const { logger } = context;
   const cwd = cwdOf(context);
@@ -55,19 +57,12 @@ export async function verifyConditions(
     );
   }
 
-  try {
-    exec('git', ['--version'], { stdio: 'pipe' });
-  } catch {
-    throw new SemanticReleaseError(
-      'git is not available.',
-      'ENOGIT',
-      'The `git` executable could not be found. Ensure git is installed and available on PATH.',
-    );
-  }
+  const git = new GitClient({ cwd, run: runner });
+  git.version();
 
   const submodules = discoverSubmoduleGoMods(cwd, config.modules, logger);
   // A directory git cannot tag is found now, not after the release commit.
-  checkTagNames(cwd, tagNames(cwd, submodules, '0.0.0'), exec);
+  checkTagNames(git, tagNames(cwd, submodules, '0.0.0'));
   if (submodules.length === 0) {
     logger.log(
       'No submodule go.mod files found — operating in single-module mode.',
@@ -86,12 +81,12 @@ export async function verifyConditions(
  *
  * @param pluginConfig The plugin configuration.
  * @param context      The semantic-release context.
- * @param exec         Command executor (injectable for testing).
+ * @param runner       Program runner (injectable for testing).
  */
 export async function prepare(
   pluginConfig: GomodPluginConfig,
   context: PrepareContext,
-  exec: ExecFn = defaultExec,
+  runner: Run = run,
 ): Promise<void> {
   const {
     logger,
@@ -100,13 +95,18 @@ export async function prepare(
   const cwd = cwdOf(context);
   const config = resolveConfig(pluginConfig);
 
+  const go = new GoClient({ run: runner });
   const rootGoMod = path.join(cwd, 'go.mod');
   const rootModule = readModulePath(rootGoMod);
   logger.log('Root module: %s', rootModule);
 
   const submodules = discoverSubmoduleGoMods(cwd, config.modules, logger);
   // Stop before any file is rewritten if a tag cannot be created later.
-  planTags(cwd, tagNames(cwd, submodules, version), config.pushTags, exec);
+  planTags(
+    new GitClient({ cwd, run: runner }),
+    tagNames(cwd, submodules, version),
+    config.pushTags,
+  );
   if (submodules.length === 0) {
     logger.log('No submodules to update.');
     return;
@@ -119,7 +119,7 @@ export async function prepare(
     if (!config.skipGoModTidy) {
       const modDir = path.dirname(goModPath);
       try {
-        exec('go', ['mod', 'tidy'], { cwd: modDir, stdio: 'pipe' });
+        go.modTidy(modDir);
         logger.log('go mod tidy OK in %s', path.relative(cwd, modDir));
       } catch (err: unknown) {
         logger.warn(
@@ -145,12 +145,12 @@ export async function prepare(
  *
  * @param pluginConfig The plugin configuration.
  * @param context      The semantic-release context.
- * @param exec         Command executor (injectable for testing).
+ * @param runner       Program runner (injectable for testing).
  */
 export async function publish(
   pluginConfig: GomodPluginConfig,
   context: PublishContext,
-  exec: ExecFn = defaultExec,
+  runner: Run = run,
 ): Promise<void> {
   const {
     logger,
@@ -168,9 +168,10 @@ export async function publish(
 
   const tags = tagNames(cwd, submodules, version);
   // Validate every tag before the first one is created or pushed.
-  const plans = planTags(cwd, tags, config.pushTags, exec);
+  const git = new GitClient({ cwd, run: runner });
+  const plans = planTags(git, tags, config.pushTags);
   for (const plan of plans) {
-    createAndPushTag(cwd, plan, config.pushTags, logger, exec);
+    createAndPushTag(git, plan, config.pushTags, logger);
   }
 
   logger.log('Tagged %d module(s) at v%s.', allGoMods.length, version);

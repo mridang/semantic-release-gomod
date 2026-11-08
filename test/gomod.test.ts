@@ -1,5 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
-import type { ExecFn } from '../src/exec.js';
+import type { Run } from '../src/utils/exec.js';
 import { readFile, symlink } from 'node:fs/promises';
 import path, { join } from 'node:path';
 import {
@@ -11,7 +11,13 @@ import {
   readModulePath,
   updateGoModRequires,
 } from '../src/gomod.js';
-import { commandsOf, exitedWith, HEAD, mockExec } from './utils/context.js';
+import {
+  commandsOf,
+  gitWith,
+  exitedWith,
+  HEAD,
+  mockExec,
+} from './utils/context.js';
 import { goMod } from './utils/go-mod.js';
 import { recordingLogger } from './utils/logger.js';
 import { withTmp } from './utils/tmpdir.js';
@@ -784,7 +790,7 @@ describe('planTags', () => {
 
   it('marks tags by whether they already exist at HEAD', () => {
     const exec = mockExec(() => undefined, { 'a/v1.0.0': HEAD });
-    expect(planTags('/repo', ['a/v1.0.0', 'b/v1.0.0'], false, exec)).toEqual([
+    expect(planTags(gitWith(exec), ['a/v1.0.0', 'b/v1.0.0'], false)).toEqual([
       { tag: 'a/v1.0.0', exists: true },
       { tag: 'b/v1.0.0', exists: false },
     ]);
@@ -792,7 +798,7 @@ describe('planTags', () => {
 
   it('checks the names, then HEAD, then each tag, and creates nothing', () => {
     const exec = mockExec();
-    planTags('/repo', ['v1.0.0', 'a/v1.0.0'], false, exec);
+    planTags(gitWith(exec), ['v1.0.0', 'a/v1.0.0'], false);
     expect(commandsOf(exec)).toEqual([
       'git check-ref-format refs/tags/v1.0.0',
       'git check-ref-format refs/tags/a/v1.0.0',
@@ -805,7 +811,7 @@ describe('planTags', () => {
   it('refuses a tag that exists at another commit than HEAD', () => {
     const exec = mockExec(() => undefined, { 'a/v1.0.0': OTHER });
     expect(() =>
-      planTags('/repo', ['v1.0.0', 'a/v1.0.0'], false, exec),
+      planTags(gitWith(exec), ['v1.0.0', 'a/v1.0.0'], false),
     ).toThrow(
       expect.objectContaining({
         code: 'ETAGMISMATCH',
@@ -820,7 +826,7 @@ describe('planTags', () => {
       'b/v1.0.0': OTHER,
     });
     expect(() =>
-      planTags('/repo', ['a/v1.0.0', 'b/v1.0.0'], false, exec),
+      planTags(gitWith(exec), ['a/v1.0.0', 'b/v1.0.0'], false),
     ).toThrow(/a\/v1\.0\.0 .*b\/v1\.0\.0/);
   });
 
@@ -829,7 +835,7 @@ describe('planTags', () => {
       if (cmd.endsWith('refs/tags/bad name/v1.0.0')) throw exitedWith(1);
     });
     expect(() =>
-      planTags('/repo', ['v1.0.0', 'bad name/v1.0.0'], false, exec),
+      planTags(gitWith(exec), ['v1.0.0', 'bad name/v1.0.0'], false),
     ).toThrow(
       expect.objectContaining({
         code: 'EINVALIDTAG',
@@ -844,7 +850,7 @@ describe('planTags', () => {
 
   it('refuses a tag starting with a dash without asking git', () => {
     const exec = mockExec();
-    expect(() => planTags('/repo', ['-dash/v1.0.0'], false, exec)).toThrow(
+    expect(() => planTags(gitWith(exec), ['-dash/v1.0.0'], false)).toThrow(
       expect.objectContaining({ code: 'EINVALIDTAG' }),
     );
     expect(exec).not.toHaveBeenCalled();
@@ -857,7 +863,7 @@ describe('planTags and the remote', () => {
   it('refuses a tag that exists on the remote at another commit', () => {
     const exec = mockExec(() => undefined, {}, { 'sub/v1.0.0': OTHER });
     expect(() =>
-      planTags('/repo', ['v1.0.0', 'sub/v1.0.0'], true, exec),
+      planTags(gitWith(exec), ['v1.0.0', 'sub/v1.0.0'], true),
     ).toThrow(
       expect.objectContaining({
         code: 'ETAGMISMATCH',
@@ -867,7 +873,7 @@ describe('planTags and the remote', () => {
   });
 
   it('accepts a remote tag at HEAD and an annotated tag peeled to HEAD', () => {
-    const exec = jest.fn<ExecFn>((file, args) => {
+    const exec = jest.fn<Run>((file, args) => {
       const cmd = [file, ...args].join(' ');
       if (cmd === 'git rev-parse HEAD') return HEAD;
       if (cmd === 'git ls-remote --tags origin') {
@@ -876,14 +882,14 @@ describe('planTags and the remote', () => {
       if (cmd.includes('--verify')) throw exitedWith(1);
       return '';
     });
-    expect(planTags('/repo', ['v1.0.0', 'a/v1.0.0'], true, exec)).toEqual([
+    expect(planTags(gitWith(exec), ['v1.0.0', 'a/v1.0.0'], true)).toEqual([
       { tag: 'v1.0.0', exists: false },
       { tag: 'a/v1.0.0', exists: false },
     ]);
   });
 
   it('refuses an annotated remote tag whose peeled commit is not HEAD', () => {
-    const exec = jest.fn<ExecFn>((file, args) => {
+    const exec = jest.fn<Run>((file, args) => {
       const cmd = [file, ...args].join(' ');
       if (cmd === 'git rev-parse HEAD') return HEAD;
       if (cmd === 'git ls-remote --tags origin') {
@@ -892,14 +898,14 @@ describe('planTags and the remote', () => {
       if (cmd.includes('--verify')) throw exitedWith(1);
       return '';
     });
-    expect(() => planTags('/repo', ['a/v1.0.0'], true, exec)).toThrow(
+    expect(() => planTags(gitWith(exec), ['a/v1.0.0'], true)).toThrow(
       expect.objectContaining({ code: 'ETAGMISMATCH' }),
     );
   });
 
   it('does not contact the remote when the tags are not pushed', () => {
     const exec = mockExec();
-    planTags('/repo', ['v1.0.0'], false, exec);
+    planTags(gitWith(exec), ['v1.0.0'], false);
     expect(commandsOf(exec).some((cmd) => cmd.includes('ls-remote'))).toBe(
       false,
     );
@@ -907,18 +913,18 @@ describe('planTags and the remote', () => {
 
   it('asks the remote once, after the local checks', () => {
     const exec = mockExec();
-    planTags('/repo', ['v1.0.0'], true, exec);
+    planTags(gitWith(exec), ['v1.0.0'], true);
     expect(commandsOf(exec).filter((cmd) => cmd.includes('ls-remote'))).toEqual(
       ['git ls-remote --tags origin'],
     );
   });
 
   it('rethrows a failing ls-remote', () => {
-    const exec = jest.fn<ExecFn>((file, args) => {
+    const exec = jest.fn<Run>((file, args) => {
       if (args.includes('ls-remote')) throw exitedWith(128);
       return file === 'git' && args[0] === 'rev-parse' ? HEAD : '';
     });
-    expect(() => planTags('/repo', ['v1.0.0'], true, exec)).toThrow(
+    expect(() => planTags(gitWith(exec), ['v1.0.0'], true)).toThrow(
       expect.objectContaining({ status: 128 }),
     );
   });
@@ -938,7 +944,7 @@ describe('planTags failures that are not git answering no', () => {
       const exec = mockExec((cmd) => {
         if (cmd.startsWith('git check-ref-format')) throw failure;
       });
-      expect(() => planTags('/repo', ['v1.0.0'], false, exec)).toThrow(failure);
+      expect(() => planTags(gitWith(exec), ['v1.0.0'], false)).toThrow(failure);
     },
   );
 
@@ -951,23 +957,23 @@ describe('planTags failures that are not git answering no', () => {
   ])(
     'rethrows %s from the tag lookup instead of calling the tag missing',
     (_name, failure) => {
-      const exec = jest.fn<ExecFn>((file, args) => {
+      const exec = jest.fn<Run>((file, args) => {
         if (args.includes('--verify')) throw failure;
         return file === 'git' && args[0] === 'rev-parse' ? HEAD : '';
       });
-      expect(() => planTags('/repo', ['v1.0.0'], false, exec)).toThrow(failure);
+      expect(() => planTags(gitWith(exec), ['v1.0.0'], false)).toThrow(failure);
     },
   );
 });
 
 describe('createAndPushTag', () => {
-  const options = { cwd: '/repo', stdio: 'pipe' };
+  const options = { cwd: '/repo' };
   const missing = { tag: 'v1.2.3', exists: false };
 
   it('creates and pushes the tag', () => {
     const exec = mockExec();
     const { logger, lines } = recordingLogger();
-    createAndPushTag('/repo', missing, true, logger, exec);
+    createAndPushTag(gitWith(exec), missing, true, logger);
     expect(exec.mock.calls).toEqual([
       ['git', ['tag', '--', 'v1.2.3'], options],
       ['git', ['push', 'origin', 'refs/tags/v1.2.3'], options],
@@ -983,11 +989,10 @@ describe('createAndPushTag', () => {
   ])('passes a tag with %s as one argument', (_name, tag) => {
     const exec = mockExec();
     createAndPushTag(
-      '/repo',
+      gitWith(exec),
       { tag, exists: false },
       true,
       recordingLogger().logger,
-      exec,
     );
     expect(exec.mock.calls.map(([file, args]) => [file, ...args])).toEqual([
       ['git', 'tag', '--', tag],
@@ -997,7 +1002,7 @@ describe('createAndPushTag', () => {
 
   it('only creates the tag when push is off', () => {
     const exec = mockExec();
-    createAndPushTag('/repo', missing, false, recordingLogger().logger, exec);
+    createAndPushTag(gitWith(exec), missing, false, recordingLogger().logger);
     expect(commandsOf(exec)).toEqual(['git tag -- v1.2.3']);
   });
 
@@ -1005,11 +1010,10 @@ describe('createAndPushTag', () => {
     const exec = mockExec();
     const { logger, lines } = recordingLogger();
     createAndPushTag(
-      '/repo',
+      gitWith(exec),
       { tag: 'v1.2.3', exists: true },
       true,
       logger,
-      exec,
     );
     expect(lines).toEqual([
       'Tag %s already exists, skipping v1.2.3',
@@ -1023,7 +1027,7 @@ describe('createAndPushTag', () => {
       if (cmd.startsWith('git tag')) throw new Error('fatal: cannot lock ref');
     });
     expect(() =>
-      createAndPushTag('/repo', missing, true, recordingLogger().logger, exec),
+      createAndPushTag(gitWith(exec), missing, true, recordingLogger().logger),
     ).toThrow('cannot lock ref');
     expect(exec).toHaveBeenCalledTimes(1);
   });

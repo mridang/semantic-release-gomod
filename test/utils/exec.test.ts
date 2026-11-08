@@ -1,14 +1,11 @@
 import { describe, expect, it } from '@jest/globals';
-import { defaultExec } from '../src/exec.js';
+import { run } from '../../src/utils/exec.js';
 
-const node = (code: string): string =>
-  defaultExec('node', ['-e', code], { stdio: 'pipe' });
+const node = (code: string): string => run('node', ['-e', code]);
 
-describe('defaultExec', () => {
+describe('run', () => {
   it('runs a program that succeeds', () => {
-    expect(() =>
-      defaultExec('node', ['--version'], { stdio: 'pipe' }),
-    ).not.toThrow();
+    expect(() => run('node', ['--version'])).not.toThrow();
   });
 
   it('throws when the program exits with a non-zero status', () => {
@@ -16,7 +13,7 @@ describe('defaultExec', () => {
   });
 
   it('throws when the program does not exist', () => {
-    expect(() => defaultExec('no-such-program-gomod', [])).toThrow(/ENOENT/);
+    expect(() => run('no-such-program-gomod', [])).toThrow(/ENOENT/);
   });
 
   it('returns what the program wrote to stdout', () => {
@@ -28,15 +25,11 @@ describe('defaultExec', () => {
     ['quotes and backticks', '"a\'`b`'],
     ['spaces and a glob', 'a b *'],
   ])('passes %s through unchanged, as one argument', (_name, value) => {
-    const echoed = defaultExec(
-      'node',
-      [
-        '-e',
-        'process.stdout.write(JSON.stringify(process.argv.slice(1)))',
-        value,
-      ],
-      { stdio: 'pipe' },
-    );
+    const echoed = run('node', [
+      '-e',
+      'process.stdout.write(JSON.stringify(process.argv.slice(1)))',
+      value,
+    ]);
     expect(JSON.parse(echoed)).toEqual([value]);
   });
 
@@ -60,7 +53,7 @@ describe('defaultExec', () => {
   });
 
   it('keeps the error code of a missing program', () => {
-    expect(() => defaultExec('no-such-program-gomod', [])).toThrow(
+    expect(() => run('no-such-program-gomod', [])).toThrow(
       expect.objectContaining({ code: 'ENOENT' }),
     );
   });

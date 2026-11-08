@@ -1,9 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import SemanticReleaseError from '@semantic-release/error';
-import type { ExecFn } from './exec.js';
+import type { GitClient } from './git.js';
 import type { StepLogger } from './plugin-config.js';
-import { statusOf } from './utils/error.js';
 
 /**
  * The part of the semantic-release context logger the helpers use.
@@ -372,59 +371,6 @@ export interface TagPlan {
 }
 
 /**
- * Whether git accepts a tag name. A name starting with `-` is refused too,
- * since git would read it as an option.
- *
- * @param repoRoot Absolute path to the repository root.
- * @param tag      Full tag string.
- * @param exec     Command executor (injectable for testing).
- * @returns True when `git check-ref-format` accepts `refs/tags/<tag>`.
- * @throws Whatever `git` failed with, unless it only answered "invalid" (exit status 1).
- */
-function isValidTagName(repoRoot: string, tag: string, exec: ExecFn): boolean {
-  if (tag.startsWith('-')) return false;
-  try {
-    exec('git', ['check-ref-format', `refs/tags/${tag}`], {
-      cwd: repoRoot,
-      stdio: 'pipe',
-    });
-    return true;
-  } catch (err: unknown) {
-    // Exit status 1 is git's "no"; anything else (git missing, killed,
-    // out of buffer, status 128) is a failure that must not look like one.
-    if (statusOf(err) === 1) return false;
-    throw err;
-  }
-}
-
-/**
- * The commit a tag already points at. Asks git for the ref instead of
- * reading the text of its error message, which depends on the locale.
- *
- * @param repoRoot Absolute path to the repository root.
- * @param tag      Full tag string.
- * @param exec     Command executor (injectable for testing).
- * @returns The commit hash, or undefined when the tag does not exist.
- * @throws Whatever `git` failed with, unless it only answered "missing" (exit status 1).
- */
-function tagCommit(
-  repoRoot: string,
-  tag: string,
-  exec: ExecFn,
-): string | undefined {
-  try {
-    return exec(
-      'git',
-      ['rev-parse', '-q', '--verify', `refs/tags/${tag}^{commit}`],
-      { cwd: repoRoot, stdio: 'pipe' },
-    ).trim();
-  } catch (err: unknown) {
-    if (statusOf(err) === 1) return undefined;
-    throw err;
-  }
-}
-
-/**
  * The tag of every module for a release: the module directory relative to
  * the repository root, then `/v<version>`; the root module's tag is just
  * `v<version>`.
@@ -451,17 +397,16 @@ export function tagNames(
  * allows: once semantic-release has pushed the release commit and the root
  * tag, a later failure leaves a half published release.
  *
- * @param repoRoot Absolute path to the repository root.
- * @param tags     Every full tag the release will create.
- * @param exec     Command executor (injectable for testing).
+ * @param git  The repository's git client.
+ * @param tags Every full tag the release will create.
  * @throws SemanticReleaseError `EINVALIDTAG` listing every refused tag.
  */
-export function checkTagNames(
-  repoRoot: string,
-  tags: readonly string[],
-  exec: ExecFn,
-): void {
-  const invalid = tags.filter((tag) => !isValidTagName(repoRoot, tag, exec));
+export function checkTagNames(git: GitClient, tags: readonly string[]): void {
+  // A name starting with `-` is refused without asking git, which would read
+  // it as an option.
+  const invalid = tags.filter(
+    (tag) => tag.startsWith('-') || !git.checkRefFormat(`refs/tags/${tag}`),
+  );
   if (invalid.length > 0) {
     throw new SemanticReleaseError(
       `Cannot create tag(s) git rejects: ${invalid.join(', ')}.`,
@@ -472,59 +417,29 @@ export function checkTagNames(
 }
 
 /**
- * The tags that exist on the remote, with the commit each points at.
- *
- * @param repoRoot Absolute path to the repository root.
- * @param exec     Command executor (injectable for testing).
- * @returns A map from tag name to commit hash; an annotated tag maps to the
- * commit it peels to.
- */
-function remoteTagCommits(
-  repoRoot: string,
-  exec: ExecFn,
-): ReadonlyMap<string, string> {
-  const listing = exec('git', ['ls-remote', '--tags', 'origin'], {
-    cwd: repoRoot,
-    stdio: 'pipe',
-  });
-  // The peeled entry (`<tag>^{}`) follows its tag object, so it wins.
-  return new Map(
-    listing.split('\n').flatMap((line) => {
-      const match = /^([0-9a-f]+)\trefs\/tags\/(.+?)(\^\{\})?$/.exec(line);
-      return match?.[1] && match[2] ? [[match[2], match[1]] as const] : [];
-    }),
-  );
-}
-
-/**
  * Check every tag before any of them is created or pushed, so a bad one
  * cannot leave a release half published. A tag name git would refuse, or an
  * existing tag, local or (when pushing) on the remote, that points at a
  * different commit than `HEAD` (which would publish stale code under the new
  * version), stops the release.
  *
- * @param repoRoot Absolute path to the repository root.
- * @param tags     Every full tag the release will create.
- * @param push     Whether the tags will be pushed, so the remote is checked.
- * @param exec     Command executor (injectable for testing).
+ * @param git  The repository's git client.
+ * @param tags Every full tag the release will create.
+ * @param push Whether the tags will be pushed, so the remote is checked.
  * @returns For each tag, whether it already exists locally at `HEAD`.
  * @throws SemanticReleaseError `EINVALIDTAG` or `ETAGMISMATCH`.
  */
 export function planTags(
-  repoRoot: string,
+  git: GitClient,
   tags: readonly string[],
   push: boolean,
-  exec: ExecFn,
 ): readonly TagPlan[] {
-  checkTagNames(repoRoot, tags, exec);
-  const head = exec('git', ['rev-parse', 'HEAD'], {
-    cwd: repoRoot,
-    stdio: 'pipe',
-  }).trim();
-  const remote = push ? remoteTagCommits(repoRoot, exec) : new Map();
+  checkTagNames(git, tags);
+  const head = git.head();
+  const remote = push ? git.lsRemoteTags() : new Map<string, string>();
   const plans = tags.map((tag) => ({
     tag,
-    local: tagCommit(repoRoot, tag, exec),
+    local: git.commitOf(tag),
     remote: remote.get(tag),
   }));
   const stale = plans.flatMap(({ tag, local, remote: onRemote }) => [
@@ -548,32 +463,27 @@ export function planTags(
  * already points at `HEAD` is not created again, so the plugin can be called
  * idempotently. Use `planTags` first to validate the whole batch.
  *
- * @param repoRoot Absolute path to the repository root.
- * @param plan     The tag, and whether it already exists at `HEAD`.
- * @param push     When true, push the tag to `origin`.
- * @param logger   semantic-release logger.
- * @param exec     Command executor (injectable for testing).
+ * @param git    The repository's git client.
+ * @param plan   The tag, and whether it already exists at `HEAD`.
+ * @param push   When true, push the tag to `origin`.
+ * @param logger semantic-release logger.
  */
 export function createAndPushTag(
-  repoRoot: string,
+  git: GitClient,
   plan: TagPlan,
   push: boolean,
   logger: Logger,
-  exec: ExecFn,
 ): void {
   const { tag } = plan;
   if (plan.exists) {
     logger.log('Tag %s already exists, skipping', tag);
   } else {
-    exec('git', ['tag', '--', tag], { cwd: repoRoot, stdio: 'pipe' });
+    git.createTag(tag);
     logger.log('Created tag %s', tag);
   }
 
   if (push) {
-    exec('git', ['push', 'origin', `refs/tags/${tag}`], {
-      cwd: repoRoot,
-      stdio: 'pipe',
-    });
+    git.pushTag(tag);
     logger.log('Pushed tag %s', tag);
   }
 }
