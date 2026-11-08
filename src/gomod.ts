@@ -263,15 +263,21 @@ export function updateGoModRequires(
   // not match `repository` or `repo-x`.
   // A first sub-path segment such as `/v2` is a different module (a new
   // major version), so it is not pinned to this one's release.
-  const requirePath = `${escaped}(?:/(?!v[0-9]+(?:/|[ \\t]))\\S*)?`;
-  const version = `([ \\t]+)v[0-9]\\S*`;
+  // A path may be quoted with " or a backtick (written as an escape here).
+  const quoteChars = '"\\u0060';
+  const quote = `[${quoteChars}]?`;
+  const requirePath = `${quote}${escaped}(?:/(?!v[0-9]+(?:/|[${quoteChars}]|[ \\t]))[^\\s${quoteChars}]*)?`;
+  const version = `(${quote})([ \\t]+)v[0-9]\\S*`;
   const inBlock = new RegExp(`^([ \\t]*${requirePath})${version}`, 'gm');
-  const single = new RegExp(`^(require[ \\t]+${requirePath})${version}`, 'gm');
-  const pin = `$1$2v${newVersion}`;
+  const single = new RegExp(
+    `^([ \\t]*require[ \\t]+${requirePath})${version}`,
+    'gm',
+  );
+  const pin = `$1$2$3v${newVersion}`;
   // Only `require` directives are pinned, never replace, exclude or retract.
   const updated = content
     .replace(
-      /(^require[ \t]*\([ \t]*(?:\/\/[^\r\n]*)?\r?\n)([\s\S]*?)(^[ \t]*\))/gm,
+      /(^[ \t]*require[ \t]*\([ \t]*(?:\/\/[^\r\n]*)?\r?\n)([\s\S]*?)(^[ \t]*\))/gm,
       (_match, open: string, body: string, close: string) =>
         `${open}${body.replace(inBlock, pin)}${close}`,
     )

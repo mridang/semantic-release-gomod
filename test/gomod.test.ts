@@ -572,6 +572,56 @@ describe('updateGoModRequires', () => {
     });
   });
 
+  it.each([
+    [
+      'an indented opener',
+      '  require (\n\tgithub.com/example/repo v1.0.0\n  )\n',
+    ],
+    [
+      'a tab-indented opener',
+      '\trequire (\n\tgithub.com/example/repo v1.0.0\n)\n',
+    ],
+    [
+      'an indented single-line require',
+      '  require github.com/example/repo v1.0.0\n',
+    ],
+    ['a quoted single-line path', 'require "github.com/example/repo" v1.0.0\n'],
+    [
+      'a raw-quoted single-line path',
+      'require `github.com/example/repo` v1.0.0\n',
+    ],
+    [
+      'a quoted path in a block',
+      'require (\n\t"github.com/example/repo" v1.0.0\n)\n',
+    ],
+    [
+      'a quoted sub-path in a block',
+      'require (\n\t"github.com/example/repo/sub" v1.0.0\n)\n',
+    ],
+    [
+      'an indented entry in a block',
+      'require (\n    github.com/example/repo v1.0.0\n)\n',
+    ],
+  ])('pins %s', async (_name, body) => {
+    const file = `module x\n\n${body}`;
+    await withTmp({ 'go.mod': file }, async (dir) => {
+      updateGoModRequires(
+        join(dir, 'go.mod'),
+        'github.com/example/repo',
+        '2.0.0',
+      );
+      expect(await readFile(join(dir, 'go.mod'), 'utf8')).toBe(
+        file.replace('v1.0.0', 'v2.0.0'),
+      );
+    });
+  });
+
+  it('leaves a quoted longer module name alone', async () => {
+    expect(await update(['"github.com/example/repository" v1.0.0'])).toContain(
+      '"github.com/example/repository" v1.0.0',
+    );
+  });
+
   it('pins every require block and a single-line require in the same file', async () => {
     const file = (v: string): string =>
       [
