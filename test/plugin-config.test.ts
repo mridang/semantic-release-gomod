@@ -18,6 +18,13 @@ describe('resolveConfig', () => {
     },
   );
 
+  it.each([[false], [0], ['']])(
+    'treats modules %j like an unset option, as before',
+    (modules) => {
+      expect(resolveConfig(rawConfig({ modules })).modules).toBeUndefined();
+    },
+  );
+
   it.each([[5], [true], [{}], [[1]], [['a', null]], [[['a']]]])(
     'rejects modules %j with a coded error instead of crashing',
     (modules) => {

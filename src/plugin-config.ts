@@ -57,7 +57,8 @@ export interface ResolvedConfig {
  * Apply the defaults to the user-supplied options. A single glob string is
  * normalised to an array, and an unset or `null` `modules` stays undefined,
  * which signals the plugin to auto-discover. `null` (as config files such as
- * JSON and YAML write it) counts as unset for every option with a default.
+ * JSON and YAML write it) counts as unset for every option with a default, and
+ * so does any other falsy `modules`.
  *
  * @param config The plugin configuration.
  * @returns The resolved options.
@@ -81,9 +82,8 @@ export function resolveConfig(config: GomodPluginConfig): ResolvedConfig {
  * @throws SemanticReleaseError `EINVALIDMODULES` for any other type.
  */
 function resolveModules(modules: unknown): readonly string[] | undefined {
-  if (modules === undefined || modules === null || modules === '') {
-    return undefined;
-  }
+  // Any falsy value (undefined, null, false, 0, '') means "not configured".
+  if (!modules) return undefined;
   if (typeof modules === 'string') return [modules];
   if (
     Array.isArray(modules) &&
