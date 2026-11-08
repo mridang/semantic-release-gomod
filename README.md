@@ -99,11 +99,13 @@ All options are case-sensitive and lowercased in the JSON configuration.
   auto-discovery.
 
   Which `go.mod` files are found: the root-level `go.mod` is never a
-  submodule. Auto-discovery and wildcards do not search `.git`, `vendor` or
-  `node_modules`, and each skipped `vendor` or `node_modules` directory is
-  logged. Other dot-directories such as `.tools` are searched. Name a
-  `go.mod` literally, such as `vendor/x/go.mod`, to include one in a skipped
-  directory. Symlinked `go.mod` files are ignored. Go also ignores
+  submodule. Auto-discovery and wildcards do not search `vendor`, `node_modules` or any
+  directory whose name starts with a dot (`.git`, `.go`, `.tools`, a git
+  worktree under `.claude`), and each skipped directory other than `.git` is
+  logged. A go.mod below a dot-directory could never be released, because
+  neither a Go module path nor a git ref may have a component starting with a
+  dot. Name a `go.mod` literally, such as `vendor/x/go.mod`, to include one in
+  a skipped directory. Symlinked `go.mod` files are ignored. Go also ignores
   directories named `testdata` or starting with `_`; this plugin does not,
   so list the modules explicitly with `modules` if you have fixture modules
   there.

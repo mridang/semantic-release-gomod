@@ -11,11 +11,18 @@ type Logger = Pick<VerifyConditionsContext['logger'], 'log' | 'warn'>;
 
 /**
  * Directories that are not searched for modules when walking the tree or
- * expanding a wildcard: git's own data, and vendored dependencies. A literal
- * path into one of them is still honoured. Other dot-directories such as
- * `.tools` are searched, because they can hold real modules.
+ * expanding a wildcard: git's data, vendored dependencies, and every
+ * dot-directory (such as a `.go` module cache, `.tools` or a git worktree
+ * under `.claude`). A go.mod below a dot-directory can never be released,
+ * because neither a Go module path nor a git ref may have a component
+ * starting with a dot. A literal path into one of them is still honoured.
+ *
+ * @param name A directory name.
+ * @returns True when the directory is not searched.
  */
-const IGNORED_DIRS: readonly string[] = ['.git', 'vendor', 'node_modules'];
+function isIgnoredDir(name: string): boolean {
+  return name === 'vendor' || name === 'node_modules' || name.startsWith('.');
+}
 
 /**
  * Read a directory, returning an empty array on any I/O error.
@@ -45,7 +52,7 @@ function searchableSubdirs(dir: string, logger: Logger): readonly string[] {
     .filter((entry) => entry.isDirectory())
     .flatMap((entry) => {
       const full = path.join(dir, entry.name);
-      if (!IGNORED_DIRS.includes(entry.name)) return [full];
+      if (!isIgnoredDir(entry.name)) return [full];
       if (entry.name !== '.git') {
         logger.log(
           'Not searching %s for modules. Name a go.mod in it in the `modules` option to include it.',

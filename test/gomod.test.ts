@@ -90,7 +90,7 @@ describe('discoverSubmoduleGoMods', () => {
   );
 
   it.each([[undefined], [['**/go.mod']], [['*/*/go.mod']]])(
-    'skips .git but searches other dot-directories (patterns %j)',
+    'skips .git and every other dot-directory (patterns %j)',
     async (patterns) => {
       await withTmp(
         {
@@ -100,29 +100,33 @@ describe('discoverSubmoduleGoMods', () => {
           '.ci/go.mod': goMod('github.com/example/repo/.ci'),
         },
         async (dir) => {
-          expect(discover(dir, patterns)).toEqual(
-            expect.arrayContaining([join(dir, '.tools/y/go.mod')]),
-          );
-          expect(discover(dir, patterns)).not.toContain(
-            join(dir, '.git/modules/x/go.mod'),
-          );
+          expect(discover(dir, patterns)).toEqual([]);
         },
       );
     },
   );
 
-  it('finds the modules in .tools and .ci that auto-discovery always found', async () => {
+  it('honours a literal path into a dot-directory, which Go cannot release', async () => {
+    await withTmp(
+      { '.tools/go.mod': goMod('github.com/example/repo/.tools') },
+      async (dir) => {
+        expect(discover(dir, ['.tools/go.mod'])).toEqual([
+          join(dir, '.tools/go.mod'),
+        ]);
+      },
+    );
+  });
+
+  it('does not walk into a Go module cache kept in a dot-directory', async () => {
     await withTmp(
       {
         'go.mod': goMod('github.com/example/repo'),
-        '.tools/go.mod': goMod('github.com/example/repo/.tools'),
-        '.ci/go.mod': goMod('github.com/example/repo/.ci'),
+        '.go/pkg/mod/github.com/a/b@v1.2.3/go.mod': goMod('github.com/a/b'),
+        'sub/go.mod': goMod('github.com/example/repo/sub'),
       },
       async (dir) => {
-        expect(discover(dir)).toEqual([
-          join(dir, '.ci/go.mod'),
-          join(dir, '.tools/go.mod'),
-        ]);
+        expect(discover(dir)).toEqual([join(dir, 'sub/go.mod')]);
+        expect(discover(dir, ['**/go.mod'])).toEqual([join(dir, 'sub/go.mod')]);
       },
     );
   });
