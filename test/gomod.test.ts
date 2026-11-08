@@ -360,6 +360,67 @@ describe('updateGoModRequires', () => {
     });
   });
 
+  it.each([
+    ['plain', 'require (', '\n'],
+    ['no space', 'require(', '\n'],
+    ['a trailing space', 'require ( ', '\n'],
+    ['a trailing comment', 'require ( // direct deps', '\n'],
+    ['CRLF', 'require (', '\r\n'],
+    ['a trailing comment and CRLF', 'require ( // c', '\r\n'],
+  ])('pins a require block opened with %s', async (_name, opener, eol) => {
+    const file = (version: string): string =>
+      [
+        'module x',
+        '',
+        opener,
+        `\tgithub.com/example/repo ${version}`,
+        '\tgithub.com/other/lib v3.0.0',
+        ')',
+        '',
+      ].join(eol);
+    await withTmp({ 'go.mod': file('v1.0.0') }, async (dir) => {
+      updateGoModRequires(
+        join(dir, 'go.mod'),
+        'github.com/example/repo',
+        '2.0.0',
+      );
+      expect(await readFile(join(dir, 'go.mod'), 'utf8')).toBe(file('v2.0.0'));
+    });
+  });
+
+  it('pins every require block and a single-line require in the same file', async () => {
+    const file = (v: string): string =>
+      [
+        'module x',
+        `require github.com/example/repo ${v}`,
+        'require (',
+        `\tgithub.com/example/repo/a ${v}`,
+        ')',
+        'require ( // second',
+        `\tgithub.com/example/repo/b ${v} // indirect`,
+        ')',
+        '',
+      ].join('\n');
+    await withTmp({ 'go.mod': file('v1.0.0') }, async (dir) => {
+      updateGoModRequires(
+        join(dir, 'go.mod'),
+        'github.com/example/repo',
+        '2.0.0',
+      );
+      expect(await readFile(join(dir, 'go.mod'), 'utf8')).toBe(file('v2.0.0'));
+    });
+  });
+
+  it.each([
+    ['a pseudo-version', 'v0.0.0-20240101120000-abcdef123456'],
+    ['an incompatible version', 'v2.0.0+incompatible'],
+    ['a pre-release', 'v1.0.0-rc.1'],
+  ])('replaces %s', async (_name, version) => {
+    expect(await update([`github.com/example/repo ${version}`])).toContain(
+      'github.com/example/repo v2.0.0',
+    );
+  });
+
   it('pins a single-line require', async () => {
     await withTmp(
       {

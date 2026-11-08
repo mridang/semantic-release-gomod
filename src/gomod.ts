@@ -206,7 +206,7 @@ export function updateGoModRequires(
   // Only `require` directives are pinned, never replace, exclude or retract.
   const updated = content
     .replace(
-      /(^require[ \t]*\(\r?\n)([\s\S]*?)(^[ \t]*\))/gm,
+      /(^require[ \t]*\([ \t]*(?:\/\/[^\r\n]*)?\r?\n)([\s\S]*?)(^[ \t]*\))/gm,
       (_match, open: string, body: string, close: string) =>
         `${open}${body.replace(inBlock, pin)}${close}`,
     )
