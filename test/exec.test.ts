@@ -56,4 +56,22 @@ describe('defaultExec', () => {
       ),
     ).not.toThrow(/s3cret/);
   });
+
+  it('keeps the error code of a missing program', () => {
+    expect(() => defaultExec('no-such-program-gomod', [])).toThrow(
+      expect.objectContaining({ code: 'ENOENT' }),
+    );
+  });
+
+  it('keeps the exit status of a failing program', () => {
+    expect(() => node('process.exit(3)')).toThrow(
+      expect.objectContaining({ status: 3 }),
+    );
+  });
+
+  it('keeps the signal that killed the program', () => {
+    expect(() => node('process.kill(process.pid, "SIGTERM")')).toThrow(
+      expect.objectContaining({ signal: 'SIGTERM' }),
+    );
+  });
 });

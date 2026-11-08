@@ -1,5 +1,11 @@
 import { execFileSync, type ExecFileSyncOptions } from 'node:child_process';
-import { messageOf, redactCredentials } from './utils/error.js';
+import {
+  codeOf,
+  messageOf,
+  redactCredentials,
+  signalOf,
+  statusOf,
+} from './utils/error.js';
 
 /**
  * A function that runs a program synchronously, without a shell. The program
@@ -25,9 +31,33 @@ export type ExecFn = (
 const MAX_BUFFER = 64 * 1024 * 1024;
 
 /**
+ * A failed child process whose message has been redacted. It keeps the
+ * machine-readable fields of the original error, so callers can tell a
+ * missing program (`ENOENT`) from a failing one (`status`) or a kill
+ * (`signal`), without carrying the unredacted original along.
+ */
+class ExecError extends Error {
+  readonly code: string | undefined;
+  readonly status: number | undefined;
+  readonly signal: string | undefined;
+
+  /**
+   * @param source The error thrown by `execFileSync`.
+   */
+  constructor(source: unknown) {
+    super(redactCredentials(messageOf(source)));
+    this.name = 'ExecError';
+    this.code = codeOf(source);
+    this.status = statusOf(source);
+    this.signal = signalOf(source);
+  }
+}
+
+/**
  * Default executor that delegates to Node's `execFileSync`. A failure is
  * rethrown with credentials in URLs (such as a token in a remote) redacted
- * from its message, since git echoes the remote in its errors.
+ * from its message, since git echoes the remote in its errors, and with the
+ * `code`, `status` and `signal` of the original kept.
  *
  * @param file The program to run.
  * @param args Its arguments.
@@ -38,6 +68,6 @@ export const defaultExec: ExecFn = (file, args, opts) => {
   try {
     execFileSync(file, args, { maxBuffer: MAX_BUFFER, ...opts });
   } catch (err: unknown) {
-    throw new Error(redactCredentials(messageOf(err)));
+    throw new ExecError(err);
   }
 };

@@ -1,5 +1,11 @@
 import { describe, expect, it } from '@jest/globals';
-import { messageOf, redactCredentials } from '../../src/utils/error.js';
+import {
+  codeOf,
+  messageOf,
+  redactCredentials,
+  signalOf,
+  statusOf,
+} from '../../src/utils/error.js';
 
 describe('messageOf', () => {
   it.each([
@@ -26,5 +32,35 @@ describe('redactCredentials', () => {
     ['mailto me@example.com', 'mailto me@example.com'],
   ])('redacts %s', (input, expected) => {
     expect(redactCredentials(input)).toBe(expected);
+  });
+});
+
+describe('codeOf', () => {
+  it('reads the string code of an error', () => {
+    expect(codeOf(Object.assign(new Error('x'), { code: 'EBOOM' }))).toBe(
+      'EBOOM',
+    );
+  });
+
+  it.each([[new Error('x')], [{ code: 5 }], ['ENOENT'], [null], [undefined]])(
+    'gives undefined for %j',
+    (thrown) => {
+      expect(codeOf(thrown)).toBeUndefined();
+    },
+  );
+});
+
+describe('statusOf and signalOf', () => {
+  it('read the exit status and the signal of a failed process', () => {
+    const failure = Object.assign(new Error('x'), { status: 3, signal: null });
+    expect(statusOf(failure)).toBe(3);
+    expect(signalOf(failure)).toBeUndefined();
+    expect(signalOf({ signal: 'SIGTERM', status: null })).toBe('SIGTERM');
+    expect(statusOf({ signal: 'SIGTERM', status: null })).toBeUndefined();
+  });
+
+  it.each([['x'], [null], [undefined]])('give undefined for %j', (thrown) => {
+    expect(statusOf(thrown)).toBeUndefined();
+    expect(signalOf(thrown)).toBeUndefined();
   });
 });
