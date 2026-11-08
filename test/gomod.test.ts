@@ -390,6 +390,44 @@ describe('links and the repository boundary', () => {
   });
 });
 
+describe('GoModule.discover and the repository boundary', () => {
+  it.each([['../outside/x/go.mod'], ['a/../../outside/x/go.mod']])(
+    'drops %s, which leads outside the repository, and warns',
+    async (pattern) => {
+      await withTmp(
+        {
+          'outside/x/go.mod': goMod('github.com/example/x'),
+          'repo/a/keep': '',
+        },
+        async (dir) => {
+          const { logger, lines } = recordingLogger();
+          expect(
+            GoModule.discover(join(dir, 'repo'), [pattern], logger),
+          ).toEqual([]);
+          expect(lines).toEqual([
+            `Pattern "%s" in \`modules\` matched no go.mod files. ${pattern}`,
+          ]);
+        },
+      );
+    },
+  );
+
+  it('drops a match outside the repository that a sibling directory provides', async () => {
+    await withTmp(
+      {
+        'outside/x/go.mod': goMod('github.com/example/x'),
+        'repo/keep': '',
+      },
+      async (dir) => {
+        const { logger } = recordingLogger();
+        expect(
+          GoModule.discover(join(dir, 'repo'), ['../outside/x/go.mod'], logger),
+        ).toEqual([]);
+      },
+    );
+  });
+});
+
 describe('isInside', () => {
   it.each([
     ['a file below the root', '/repo', '/repo/a/go.mod', true],

@@ -61,6 +61,18 @@ function safeReadDir(dir: string): readonly fs.Dirent[] {
 }
 
 /**
+ * What is in a directory, sorted for a search.
+ */
+interface Listing {
+  /** Names of the regular files. */
+  readonly files: readonly string[];
+  /** Absolute paths of the subdirectories to search. */
+  readonly searchable: readonly string[];
+  /** Absolute paths of the ignored subdirectories. */
+  readonly ignored: readonly string[];
+}
+
+/**
  * List a directory once and sort what is in it: the regular files, the
  * subdirectories to search, and the ignored subdirectories (skipped before
  * they are read, so a huge `node_modules` is never walked). A directory that
@@ -70,11 +82,7 @@ function safeReadDir(dir: string): readonly fs.Dirent[] {
  * @returns Names of its regular files, and the absolute paths of the
  * subdirectories to search and of those that are ignored.
  */
-function scan(dir: string): {
-  readonly files: readonly string[];
-  readonly searchable: readonly string[];
-  readonly ignored: readonly string[];
-} {
+function scan(dir: string): Listing {
   const entries = safeReadDir(dir);
   const dirs = entries.filter((entry) => entry.isDirectory());
   const full = (entry: fs.Dirent): string => path.join(dir, entry.name);
@@ -255,88 +263,6 @@ function matchParts(dir: string, parts: readonly string[]): Found {
 }
 
 /**
- * Read a go.mod file and extract the module declaration.
- *
- * @param goModPath Absolute path to the go.mod file.
- * @returns The module import path, e.g. `"github.com/mridang/wilhelm"`.
- * @throws Error if no `module` line is found, if it uses the grouped
- * `module (` form, or if its quote is not closed.
- */
-function readModulePath(goModPath: string): string {
-  const content = fs.readFileSync(goModPath, 'utf8');
-  const line = content
-    .split('\n')
-    .find((candidate) => /^\uFEFF?module(?:\s|\(|$)/.test(candidate));
-  if (line === undefined) {
-    throw new Error(`No module declaration found in ${goModPath}`);
-  }
-  if (/^\uFEFF?module\s*\(/.test(line)) {
-    throw new Error(
-      `Grouped module declarations ("module (") are not supported, found in ${goModPath}`,
-    );
-  }
-  const token = /^\uFEFF?module\s+(\S+)/.exec(line)?.[1];
-  if (token === undefined) {
-    throw new Error(`No module declaration found in ${goModPath}`);
-  }
-  const quoted = /^(["`])(.*)\1$/.exec(token);
-  if (quoted) return quoted[2];
-  if (/^["`]/.test(token)) {
-    throw new Error(
-      `Unterminated quote in the module declaration in ${goModPath}`,
-    );
-  }
-  return token;
-}
-
-/**
- * Update every `require` line in a go.mod file whose import path
- * starts with `rootModule`, replacing the version with `newVersion`.
- * Lines with `// indirect` comments are preserved as-is.
- *
- * Handles both single-line requires and require blocks.
- *
- * @param filePath   Absolute path to the go.mod file to rewrite.
- * @param rootModule Root module import path (e.g. `"github.com/mridang/wilhelm"`).
- * @param newVersion New semver string without leading `v` (e.g. `"1.2.3"`).
- */
-function updateGoModRequires(
-  filePath: string,
-  rootModule: string,
-  newVersion: string,
-): void {
-  const content = fs.readFileSync(filePath, 'utf8');
-  // Escape slashes and dots in the module path for use in regex
-  const escaped = rootModule.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // The path must be the root module or one of its sub-paths, so `repo` does
-  // not match `repository` or `repo-x`.
-  // A first sub-path segment such as `/v2` is a different module (a new
-  // major version), so it is not pinned to this one's release.
-  // A path may be quoted with " or a backtick (written as an escape here).
-  const quoteChars = '"\\u0060';
-  const quote = `[${quoteChars}]?`;
-  const requirePath = `${quote}${escaped}(?:/(?!v[0-9]+(?:/|[${quoteChars}]|[ \\t]))[^\\s${quoteChars}]*)?`;
-  const version = `(${quote})([ \\t]+)v[0-9]\\S*`;
-  const inBlock = new RegExp(`^([ \\t]*${requirePath})${version}`, 'gm');
-  const single = new RegExp(
-    `^([ \\t]*require[ \\t]+${requirePath})${version}`,
-    'gm',
-  );
-  const pin = `$1$2$3v${newVersion}`;
-  // Only `require` directives are pinned, never replace, exclude or retract.
-  const updated = content
-    .replace(
-      /(^[ \t]*require[ \t]*\([ \t]*(?:\/\/[^\r\n]*)?\r?\n)([\s\S]*?)(^[ \t]*\))/gm,
-      (_match, open: string, body: string, close: string) =>
-        `${open}${body.replace(inBlock, pin)}${close}`,
-    )
-    .replace(single, pin);
-  if (updated !== content) {
-    fs.writeFileSync(filePath, updated, 'utf8');
-  }
-}
-
-/**
  * Derive the git tag prefix for a submodule given its go.mod path
  * and the repository root.
  *
@@ -373,9 +299,15 @@ export interface GoModuleOptions {
  * tidy itself. The file is read when asked, so opening one never fails.
  */
 export class GoModule {
+  /** Absolute path to the go.mod file. */
   readonly file: string;
+  /** Runs `go`. */
   private readonly run: Runner;
 
+  /**
+   * @param file Absolute path to the go.mod file.
+   * @param run  Runs `go`.
+   */
   private constructor(file: string, run: Runner) {
     this.file = file;
     this.run = run;
@@ -421,7 +353,30 @@ export class GoModule {
    * @throws Error if the file has no readable `module` declaration.
    */
   modulePath(): string {
-    return readModulePath(this.file);
+    const content = fs.readFileSync(this.file, 'utf8');
+    const line = content
+      .split('\n')
+      .find((candidate) => /^\uFEFF?module(?:\s|\(|$)/.test(candidate));
+    if (line === undefined) {
+      throw new Error(`No module declaration found in ${this.file}`);
+    }
+    if (/^\uFEFF?module\s*\(/.test(line)) {
+      throw new Error(
+        `Grouped module declarations ("module (") are not supported, found in ${this.file}`,
+      );
+    }
+    const token = /^\uFEFF?module\s+(\S+)/.exec(line)?.[1];
+    if (token === undefined) {
+      throw new Error(`No module declaration found in ${this.file}`);
+    }
+    const quoted = /^(["`])(.*)\1$/.exec(token);
+    if (quoted) return quoted[2];
+    if (/^["`]/.test(token)) {
+      throw new Error(
+        `Unterminated quote in the module declaration in ${this.file}`,
+      );
+    }
+    return token;
   }
 
   /**
@@ -448,7 +403,38 @@ export class GoModule {
    * @returns This module.
    */
   pin(rootModule: string, version: string): GoModule {
-    updateGoModRequires(this.file, rootModule, version);
+    const content = fs.readFileSync(this.file, 'utf8');
+    // Escape slashes and dots in the module path for use in regex
+    const escaped = rootModule.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // The path must be the root module or one of its sub-paths, so `repo` does
+    // not match `repository` or `repo-x`.
+    // A first sub-path segment such as `/v2` is a different module (a new
+    // major version), so it is not pinned to this one's release.
+    // A path may be quoted with " or a backtick (written as an escape here).
+    const quoteChars = '"\\u0060';
+    const quote = `[${quoteChars}]?`;
+    const requirePath = `${quote}${escaped}(?:/(?!v[0-9]+(?:/|[${quoteChars}]|[ \\t]))[^\\s${quoteChars}]*)?`;
+    const versionPattern = `(${quote})([ \\t]+)v[0-9]\\S*`;
+    const inBlock = new RegExp(
+      `^([ \\t]*${requirePath})${versionPattern}`,
+      'gm',
+    );
+    const single = new RegExp(
+      `^([ \\t]*require[ \\t]+${requirePath})${versionPattern}`,
+      'gm',
+    );
+    const pin = `$1$2$3v${version}`;
+    // Only `require` directives are pinned, never replace, exclude or retract.
+    const updated = content
+      .replace(
+        /(^[ \t]*require[ \t]*\([ \t]*(?:\/\/[^\r\n]*)?\r?\n)([\s\S]*?)(^[ \t]*\))/gm,
+        (_match, open: string, body: string, close: string) =>
+          `${open}${body.replace(inBlock, pin)}${close}`,
+      )
+      .replace(single, pin);
+    if (updated !== content) {
+      fs.writeFileSync(this.file, updated, 'utf8');
+    }
     return this;
   }
 
