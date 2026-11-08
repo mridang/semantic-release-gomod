@@ -26,6 +26,29 @@ function isIgnoredDir(name: string): boolean {
 }
 
 /**
+ * What a search found: go.mod files, and the directories it left out.
+ */
+interface Found {
+  /** Absolute paths of the go.mod files found. */
+  readonly files: readonly string[];
+  /** Absolute paths of the ignored directories that were not searched. */
+  readonly skipped: readonly string[];
+}
+
+/**
+ * Combine the results of several searches.
+ *
+ * @param parts The results to combine.
+ * @returns One result with all their files and skipped directories.
+ */
+function merge(parts: readonly Found[]): Found {
+  return {
+    files: parts.flatMap((part) => part.files),
+    skipped: parts.flatMap((part) => part.skipped),
+  };
+}
+
+/**
  * Read a directory, returning an empty array on any I/O error.
  *
  * @param dir Absolute path of the directory.
@@ -40,40 +63,41 @@ function safeReadDir(dir: string): readonly fs.Dirent[] {
 }
 
 /**
- * The subdirectories to descend into, skipping the ignored ones before they
- * are read (so a huge `node_modules` is never walked). Ignored directories
- * other than `.git` are reported, so users can see what was left out.
+ * List a directory once and sort what is in it: the regular files, the
+ * subdirectories to search, and the ignored subdirectories (skipped before
+ * they are read, so a huge `node_modules` is never walked). A directory that
+ * cannot be read is empty.
  *
- * @param dir    Absolute path of the directory.
- * @param logger Where skipped directories are reported.
- * @returns The absolute paths of the directories to search.
+ * @param dir Absolute path of the directory.
+ * @returns Names of its regular files, and the absolute paths of the
+ * subdirectories to search and of those that are ignored.
  */
-function searchableSubdirs(dir: string, logger: Logger): readonly string[] {
-  return safeReadDir(dir)
-    .filter((entry) => entry.isDirectory())
-    .flatMap((entry) => {
-      const full = path.join(dir, entry.name);
-      if (!isIgnoredDir(entry.name)) return [full];
-      if (entry.name !== '.git') {
-        logger.log(
-          'Not searching %s for modules. Name a go.mod in it in the `modules` option to include it.',
-          full,
-        );
-      }
-      return [];
-    });
+function scan(dir: string): {
+  readonly files: readonly string[];
+  readonly searchable: readonly string[];
+  readonly ignored: readonly string[];
+} {
+  const entries = safeReadDir(dir);
+  const dirs = entries.filter((entry) => entry.isDirectory());
+  const full = (entry: fs.Dirent): string => path.join(dir, entry.name);
+  return {
+    files: entries.filter((entry) => entry.isFile()).map((e) => e.name),
+    searchable: dirs.filter((e) => !isIgnoredDir(e.name)).map(full),
+    ignored: dirs.filter((e) => isIgnoredDir(e.name)).map(full),
+  };
 }
 
 /**
  * Find the submodule go.mod files: every go.mod below `root` except the
  * root-level one, or the ones the glob patterns match.
  *
- * Without patterns the tree is walked, skipping `.git`, `vendor` and
- * `node_modules`. Patterns support literal names and whole-segment `*` and
- * `**` wildcards, which skip the same directories; a literal path is
- * honoured even inside them. Links are never followed or matched, neither a symlinked go.mod nor a
- * symlinked directory, and a match outside the repository is dropped. A
- * pattern that matches nothing is reported with a warning.
+ * Without patterns the tree is walked, skipping `vendor`, `node_modules`
+ * and dot-directories. Patterns support literal names and whole-segment `*`
+ * and `**` wildcards, which skip the same directories; a literal path is
+ * honoured even inside them. Links are never followed or matched, neither a
+ * symlinked go.mod nor a symlinked directory, and a match outside the
+ * repository is dropped. A pattern that matches nothing is reported with a
+ * warning, and each skipped directory (other than `.git`) is reported once.
  *
  * @param root         Absolute path to the repository root.
  * @param globPatterns Optional array of glob patterns relative to root.
@@ -88,43 +112,58 @@ export function discoverSubmoduleGoMods(
   const rootGoMod = path.join(root, 'go.mod');
   const isSubmodule = (file: string): boolean =>
     file !== rootGoMod && isInside(root, file);
-  if (!globPatterns || globPatterns.length === 0) {
-    return walkForGoMods(root, logger).filter(isSubmodule).toSorted();
-  }
-  const found = globPatterns.map((pattern) => ({
-    pattern,
-    files: matchParts(root, pattern.split('/'), logger).filter(isSubmodule),
-  }));
-  found
-    .filter(({ files }) => files.length === 0)
+  const searches =
+    globPatterns && globPatterns.length > 0
+      ? globPatterns.map((pattern) => ({
+          pattern,
+          found: matchParts(root, pattern.split('/')),
+        }))
+      : [{ pattern: undefined, found: walkForGoMods(root) }];
+  new Set(
+    searches
+      .flatMap(({ found }) => found.skipped)
+      .filter((dir) => path.basename(dir) !== '.git'),
+  ).forEach((dir) => {
+    logger.log(
+      'Not searching %s for modules. Name a go.mod in it in the `modules` option to include it.',
+      dir,
+    );
+  });
+  searches
+    .filter(
+      ({ pattern, found }) =>
+        pattern !== undefined && !found.files.some(isSubmodule),
+    )
     .forEach(({ pattern }) => {
       logger.warn(
         'Pattern "%s" in `modules` matched no go.mod files.',
         pattern,
       );
     });
-  return [...new Set(found.flatMap(({ files }) => files))].toSorted();
+  return [
+    ...new Set(
+      searches.flatMap(({ found }) => found.files).filter(isSubmodule),
+    ),
+  ].toSorted();
 }
 
 /**
- * Recursively walk `dir` and return absolute paths of all go.mod files,
- * skipping the ignored directories. Only regular files count, so a symlink
- * named go.mod is ignored.
+ * Recursively walk `dir` and find all go.mod files, skipping the ignored
+ * directories. Only regular files count, so a symlink named go.mod is
+ * ignored.
  *
- * @param dir    Absolute path of the directory to walk.
- * @param logger Where skipped directories are reported.
+ * @param dir Absolute path of the directory to walk.
  * @returns Every go.mod file below it, including one directly inside it.
  */
-function walkForGoMods(dir: string, logger: Logger): readonly string[] {
-  const here = safeReadDir(dir)
-    .filter((entry) => entry.isFile() && entry.name === 'go.mod')
-    .map((entry) => path.join(dir, entry.name));
-  return [
-    ...here,
-    ...searchableSubdirs(dir, logger).flatMap((sub) =>
-      walkForGoMods(sub, logger),
-    ),
-  ];
+function walkForGoMods(dir: string): Found {
+  const { files, searchable, ignored } = scan(dir);
+  return merge([
+    {
+      files: files.includes('go.mod') ? [path.join(dir, 'go.mod')] : [],
+      skipped: ignored,
+    },
+    ...searchable.map(walkForGoMods),
+  ]);
 }
 
 /**
@@ -173,48 +212,48 @@ export function isInside(
  *
  * @param dir    Absolute path of the directory to match in.
  * @param parts  Pattern segments still to be matched.
- * @param logger Where skipped directories are reported.
- * @returns Absolute paths of the matching files.
+ * @returns The matching files, and the ignored directories passed over.
  */
-function matchParts(
-  dir: string,
-  parts: readonly string[],
-  logger: Logger,
-): readonly string[] {
-  if (parts.length === 0) return [];
+function matchParts(dir: string, parts: readonly string[]): Found {
+  const none: Found = { files: [], skipped: [] };
+  if (parts.length === 0) return none;
   const [head, ...tail] = parts;
 
   if (head === '**') {
-    // Zero levels: continue with tail from the current dir.
+    // Zero levels: continue with the tail from the current dir.
     // One or more levels: descend into each subdirectory.
-    return [
-      ...matchParts(dir, tail, logger),
-      ...searchableSubdirs(dir, logger).flatMap((sub) =>
-        matchParts(sub, parts, logger),
-      ),
-    ];
+    const { searchable, ignored } = scan(dir);
+    return merge([
+      matchParts(dir, tail),
+      { files: [], skipped: ignored },
+      ...searchable.map((sub) => matchParts(sub, parts)),
+    ]);
   }
 
   if (tail.length === 0) {
     // Last segment: must be a regular file (one lstat avoids a TOCTOU race).
     const candidate = path.join(dir, head);
     try {
-      return fs.lstatSync(candidate).isFile() ? [candidate] : [];
+      return fs.lstatSync(candidate).isFile()
+        ? { files: [candidate], skipped: [] }
+        : none;
     } catch {
-      return [];
+      return none;
     }
   }
 
   if (head === '*') {
     // Single-level wildcard
-    return searchableSubdirs(dir, logger).flatMap((sub) =>
-      matchParts(sub, tail, logger),
-    );
+    const { searchable, ignored } = scan(dir);
+    return merge([
+      { files: [], skipped: ignored },
+      ...searchable.map((sub) => matchParts(sub, tail)),
+    ]);
   }
 
   // Literal segment: a missing path, or a link, matches nothing.
   const next = path.join(dir, head);
-  return isRealDirectory(next) ? matchParts(next, tail, logger) : [];
+  return isRealDirectory(next) ? matchParts(next, tail) : none;
 }
 
 /**

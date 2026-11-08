@@ -188,6 +188,28 @@ describe('discoverSubmoduleGoMods', () => {
     },
   );
 
+  it('reports each skipped directory once per run, however many patterns reach it', async () => {
+    await withTmp(
+      {
+        'sub/go.mod': goMod('github.com/example/repo/sub'),
+        'node_modules/a/go.mod': goMod('x'),
+      },
+      async (dir) => {
+        const logger = mockLogger();
+        discoverSubmoduleGoMods(
+          dir,
+          ['**/go.mod', '*/go.mod', '**/**/go.mod'],
+          logger,
+        );
+        expect(logger.log).toHaveBeenCalledTimes(1);
+        expect(logger.log).toHaveBeenCalledWith(
+          expect.stringContaining('Not searching'),
+          join(dir, 'node_modules'),
+        );
+      },
+    );
+  });
+
   it('warns about a pattern that matches nothing, and still returns the rest', async () => {
     await withTmp(
       { 'sub/go.mod': goMod('github.com/example/repo/sub') },
