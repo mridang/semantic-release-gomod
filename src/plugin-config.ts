@@ -1,5 +1,10 @@
 import SemanticReleaseError from '@semantic-release/error';
-import type { Config } from 'semantic-release';
+import type { Config, VerifyConditionsContext } from 'semantic-release';
+
+/**
+ * The logger semantic-release hands to every step.
+ */
+export type StepLogger = VerifyConditionsContext['logger'];
 
 /**
  * Raw plugin configuration as provided by the user in their
@@ -178,4 +183,15 @@ function resolveModules(modules: unknown): readonly string[] | undefined {
     'EINVALIDMODULES',
     'Set `modules` to a pattern such as "assert/**/go.mod", or a list of them, or remove it to detect submodules automatically.',
   );
+}
+
+/**
+ * The directory a step runs in: the one semantic-release was given, or else
+ * the current directory, which is its own default.
+ *
+ * @param context A semantic-release step context.
+ * @returns The working directory.
+ */
+export function cwdOf(context: { readonly cwd?: string | undefined }): string {
+  return context.cwd ?? process.cwd();
 }

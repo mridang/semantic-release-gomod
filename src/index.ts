@@ -7,7 +7,11 @@ import type {
 } from 'semantic-release';
 import SemanticReleaseError from '@semantic-release/error';
 import { defaultExec, type ExecFn } from './exec.js';
-import { resolveConfig, type GomodPluginConfig } from './plugin-config.js';
+import {
+  cwdOf,
+  resolveConfig,
+  type GomodPluginConfig,
+} from './plugin-config.js';
 import {
   createAndPushTag,
   checkTagNames,
@@ -39,7 +43,7 @@ export async function verifyConditions(
   exec: ExecFn = defaultExec,
 ): Promise<void> {
   const { logger } = context;
-  const cwd = context.cwd ?? process.cwd();
+  const cwd = cwdOf(context);
   const config = resolveConfig(pluginConfig);
 
   const rootGoMod = path.join(cwd, 'go.mod');
@@ -93,7 +97,7 @@ export async function prepare(
     logger,
     nextRelease: { version },
   } = context;
-  const cwd = context.cwd ?? process.cwd();
+  const cwd = cwdOf(context);
   const config = resolveConfig(pluginConfig);
 
   const rootGoMod = path.join(cwd, 'go.mod');
@@ -152,7 +156,7 @@ export async function publish(
     logger,
     nextRelease: { version },
   } = context;
-  const cwd = context.cwd ?? process.cwd();
+  const cwd = cwdOf(context);
   const config = resolveConfig(pluginConfig);
 
   // All go.mod files: submodules + root

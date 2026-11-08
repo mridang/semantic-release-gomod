@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { resolveConfig } from '../src/plugin-config.js';
+import { cwdOf, resolveConfig } from '../src/plugin-config.js';
 import { rawConfig } from './utils/context.js';
 
 describe('resolveConfig', () => {
@@ -140,5 +140,16 @@ describe('resolveConfig', () => {
   it('pushes tags unless explicitly disabled', () => {
     expect(resolveConfig({ pushTags: false }).pushTags).toBe(false);
     expect(resolveConfig({ pushTags: true }).pushTags).toBe(true);
+  });
+});
+
+describe('cwdOf', () => {
+  it('uses the directory semantic-release was given', () => {
+    expect(cwdOf({ cwd: '/repo' })).toBe('/repo');
+  });
+
+  it('falls back to the current directory', () => {
+    expect(cwdOf({})).toBe(process.cwd());
+    expect(cwdOf({ cwd: undefined })).toBe(process.cwd());
   });
 });

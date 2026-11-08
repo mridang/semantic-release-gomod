@@ -1,14 +1,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import SemanticReleaseError from '@semantic-release/error';
-import type { VerifyConditionsContext } from 'semantic-release';
 import type { ExecFn } from './exec.js';
+import type { StepLogger } from './plugin-config.js';
 import { statusOf } from './utils/error.js';
 
 /**
  * The part of the semantic-release context logger the helpers use.
  */
-type Logger = Pick<VerifyConditionsContext['logger'], 'log' | 'warn'>;
+type Logger = Pick<StepLogger, 'log' | 'warn'>;
 
 /**
  * Directories that are not searched for modules when walking the tree or
