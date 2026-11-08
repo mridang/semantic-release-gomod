@@ -178,6 +178,18 @@ describe('readModulePath', () => {
     );
   });
 
+  it.each([
+    ['a quoted path', 'module "github.com/example/q"\n'],
+    ['a raw-quoted path', 'module `github.com/example/q`\n'],
+    ['a byte order mark', '\uFEFFmodule github.com/example/q\n'],
+    ['CRLF line endings', 'module github.com/example/q\r\ngo 1.21\r\n'],
+    ['a trailing comment', 'module github.com/example/q // the module\n'],
+  ])('reads a module declaration with %s', async (_name, content) => {
+    await withTmp({ 'go.mod': content }, async (dir) => {
+      expect(readModulePath(join(dir, 'go.mod'))).toBe('github.com/example/q');
+    });
+  });
+
   it('throws if no module line is present', async () => {
     await withTmp({ 'go.mod': 'go 1.21\n' }, async (dir) => {
       expect(() => readModulePath(join(dir, 'go.mod'))).toThrow(

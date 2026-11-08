@@ -136,7 +136,9 @@ export function readModulePath(goModPath: string): string {
   const content = fs.readFileSync(goModPath, 'utf8');
   const declared = content
     .split('\n')
-    .map((line) => /^module\s+(\S+)/.exec(line)?.[1])
+    .map((line) =>
+      /^\uFEFF?module\s+(\S+)/.exec(line)?.[1]?.replace(/^(["`])(.*)\1$/, '$2'),
+    )
     .find((name) => name !== undefined);
   if (declared === undefined) {
     throw new Error(`No module declaration found in ${goModPath}`);
