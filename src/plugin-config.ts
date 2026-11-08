@@ -1,3 +1,4 @@
+import SemanticReleaseError from '@semantic-release/error';
 import type { Config } from 'semantic-release';
 
 /**
@@ -54,18 +55,45 @@ export interface ResolvedConfig {
 
 /**
  * Apply the defaults to the user-supplied options. A single glob string is
- * normalised to an array, and an unset `modules` stays undefined, which
- * signals the plugin to auto-discover.
+ * normalised to an array, and an unset or `null` `modules` stays undefined,
+ * which signals the plugin to auto-discover. `null` (as config files such as
+ * JSON and YAML write it) counts as unset for every option with a default.
  *
  * @param config The plugin configuration.
  * @returns The resolved options.
+ * @throws SemanticReleaseError `EINVALIDMODULES` when `modules` is neither a
+ * string nor an array of strings.
  */
 export function resolveConfig(config: GomodPluginConfig): ResolvedConfig {
-  const { modules } = config;
+  const modules: unknown = config.modules;
   return {
-    modules:
-      typeof modules === 'string' ? (modules ? [modules] : undefined) : modules,
+    modules: resolveModules(modules),
     skipGoModTidy: config.skipGoModTidy === true,
     pushTags: config.pushTags !== false,
   };
+}
+
+/**
+ * Check and normalise the `modules` option.
+ *
+ * @param modules The raw option value.
+ * @returns The glob patterns, or undefined to auto-discover.
+ * @throws SemanticReleaseError `EINVALIDMODULES` for any other type.
+ */
+function resolveModules(modules: unknown): readonly string[] | undefined {
+  if (modules === undefined || modules === null || modules === '') {
+    return undefined;
+  }
+  if (typeof modules === 'string') return [modules];
+  if (
+    Array.isArray(modules) &&
+    modules.every((pattern): pattern is string => typeof pattern === 'string')
+  ) {
+    return modules;
+  }
+  throw new SemanticReleaseError(
+    "Option 'modules' must be a glob string or an array of glob strings.",
+    'EINVALIDMODULES',
+    'Set `modules` to a pattern such as "assert/**/go.mod", or a list of them, or remove it to detect submodules automatically.',
+  );
 }

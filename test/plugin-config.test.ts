@@ -1,7 +1,44 @@
 import { describe, expect, it } from '@jest/globals';
 import { resolveConfig } from '../src/plugin-config.js';
+import { rawConfig } from './utils/context.js';
 
 describe('resolveConfig', () => {
+  it.each([[null], [undefined]])(
+    'treats %s like an unset option for every option with a default',
+    (unset) => {
+      expect(
+        resolveConfig(
+          rawConfig({
+            modules: unset,
+            skipGoModTidy: unset,
+            pushTags: unset,
+          }),
+        ),
+      ).toEqual({ modules: undefined, skipGoModTidy: false, pushTags: true });
+    },
+  );
+
+  it.each([[5], [true], [{}], [[1]], [['a', null]], [[['a']]]])(
+    'rejects modules %j with a coded error instead of crashing',
+    (modules) => {
+      expect(() => resolveConfig(rawConfig({ modules }))).toThrow(
+        expect.objectContaining({
+          code: 'EINVALIDMODULES',
+          message:
+            "Option 'modules' must be a glob string or an array of glob strings.",
+        }),
+      );
+    },
+  );
+
+  it('keeps false as a real value for the boolean options', () => {
+    expect(resolveConfig({ pushTags: false, skipGoModTidy: false })).toEqual({
+      modules: undefined,
+      skipGoModTidy: false,
+      pushTags: false,
+    });
+  });
+
   it('applies the defaults to an empty config', () => {
     expect(resolveConfig({})).toEqual({
       modules: undefined,

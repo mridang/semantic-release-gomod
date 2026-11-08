@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import plugin, { prepare, publish, verifyConditions } from '../src/index.js';
-import { mockExec, stepContext } from './utils/context.js';
+import { mockExec, rawConfig, stepContext } from './utils/context.js';
 import { goMod } from './utils/go-mod.js';
 import { withTmp } from './utils/tmpdir.js';
 
@@ -71,6 +71,18 @@ describe('verifyConditions', () => {
         expect(logger.log).toHaveBeenCalledWith('Found %d submodule(s).', 1);
       },
     );
+  });
+
+  it('fails with EINVALIDMODULES for a modules option of the wrong type', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      await expect(
+        verifyConditions(
+          rawConfig({ modules: 5 }),
+          stepContext(dir).verify,
+          mockExec(),
+        ),
+      ).rejects.toMatchObject({ code: 'EINVALIDMODULES' });
+    });
   });
 
   it('runs the real git when no executor is injected', async () => {

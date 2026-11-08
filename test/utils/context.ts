@@ -5,6 +5,7 @@ import type {
   VerifyConditionsContext,
 } from 'semantic-release';
 import type { ExecFn } from '../../src/exec.js';
+import type { GomodPluginConfig } from '../../src/plugin-config.js';
 
 /**
  * A logger whose calls can be inspected.
@@ -66,4 +67,16 @@ export function stepContext(
     prepare: partial as PrepareContext,
     publish: partial as PublishContext,
   };
+}
+
+/**
+ * A plugin config with values of any type, as a config file can contain.
+ *
+ * @param options The raw option values.
+ * @returns The same object, typed as a plugin config.
+ */
+export function rawConfig(
+  options: Readonly<Record<string, unknown>>,
+): GomodPluginConfig {
+  return options;
 }
