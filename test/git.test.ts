@@ -66,39 +66,6 @@ describe('GitRepository', () => {
     });
   });
 
-  describe('isValidTagName', () => {
-    it('is true when git accepts the name', async () => {
-      const { repository, run } = repositoryThat('');
-      await expect(repository.isValidTagName('sub/v1.2.3')).resolves.toBe(true);
-      expect(run).toHaveBeenCalledWith(
-        'git',
-        ['check-ref-format', 'refs/tags/sub/v1.2.3'],
-        inRepo,
-      );
-    });
-
-    it('is false when git exits with status 1', async () => {
-      const { repository } = repositoryThat(exitedWith(1));
-      await expect(repository.isValidTagName('a b/v1')).resolves.toBe(false);
-    });
-
-    it('refuses a name starting with a dash without asking git', async () => {
-      const { repository, run } = repositoryThat('');
-      await expect(repository.isValidTagName('-dash/v1')).resolves.toBe(false);
-      expect(run).not.toHaveBeenCalled();
-    });
-
-    it.each([
-      ['status 128', exitedWith(128)],
-      ['a missing program', missingProgram],
-      ['a signal', Object.assign(new Error('x'), { signal: 'SIGKILL' })],
-    ])('rethrows %s instead of answering no', async (_name, failure) => {
-      await expect(
-        repositoryThat(failure).repository.isValidTagName('v1'),
-      ).rejects.toBe(failure);
-    });
-  });
-
   describe('remoteTags', () => {
     it('lists the tags of origin, annotated ones peeled to their commit', async () => {
       const { repository, run } = repositoryThat(
@@ -153,7 +120,40 @@ describe('GitRepository', () => {
 });
 
 describe('Tag', () => {
-  describe('commit and exists', () => {
+  describe('isValid', () => {
+    it('is true when git accepts the name', async () => {
+      const { repository, run } = repositoryThat('');
+      await expect(repository.tag('sub/v1.2.3').isValid()).resolves.toBe(true);
+      expect(run).toHaveBeenCalledWith(
+        'git',
+        ['check-ref-format', 'refs/tags/sub/v1.2.3'],
+        inRepo,
+      );
+    });
+
+    it('is false when git exits with status 1', async () => {
+      const { repository } = repositoryThat(exitedWith(1));
+      await expect(repository.tag('a b/v1').isValid()).resolves.toBe(false);
+    });
+
+    it('refuses a name starting with a dash without asking git', async () => {
+      const { repository, run } = repositoryThat('');
+      await expect(repository.tag('-dash/v1').isValid()).resolves.toBe(false);
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['status 128', exitedWith(128)],
+      ['a missing program', missingProgram],
+      ['a signal', Object.assign(new Error('x'), { signal: 'SIGKILL' })],
+    ])('rethrows %s instead of answering no', async (_name, failure) => {
+      await expect(
+        repositoryThat(failure).repository.tag('v1').isValid(),
+      ).rejects.toBe(failure);
+    });
+  });
+
+  describe('commit', () => {
     it('asks for the commit the tag peels to', async () => {
       const { repository, run } = repositoryThat(`${SHA}\n`);
       await expect(repository.tag('sub/v1.2.3').commit()).resolves.toBe(SHA);
@@ -164,15 +164,9 @@ describe('Tag', () => {
       );
     });
 
-    it('is undefined for a missing tag, which then does not exist', async () => {
+    it('is undefined for a missing tag', async () => {
       const tag = repositoryThat(exitedWith(1)).repository.tag('v1.2.3');
       await expect(tag.commit()).resolves.toBeUndefined();
-      await expect(tag.exists()).resolves.toBe(false);
-    });
-
-    it('reports an existing tag', async () => {
-      const tag = repositoryThat(SHA).repository.tag('v1.2.3');
-      await expect(tag.exists()).resolves.toBe(true);
     });
 
     it.each([

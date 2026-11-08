@@ -141,9 +141,15 @@ tags before it rewrites any file, so a directory git cannot use in a tag
 a leading `-`, and so on) stops the release with `EINVALIDTAG` before the
 release commit and the root tag exist. A tag that already exists at another
 commit than `HEAD` stops it with `ETAGMISMATCH`, because pushing it would
-publish old code under the new version. `publish` repeats both checks for all
-tags before it creates or pushes the first one. A tag that already points at
-`HEAD` is left as it is, so a re-run is safe. The `modules` option only lists
+publish old code under the new version. When `pushTags` is on, `prepare` and
+`publish` also read the tags on `origin` (`git ls-remote --tags origin`), so
+`origin` must exist and be readable, and a tag on `origin` at another commit
+stops the release too. `publish` repeats both checks for all tags before it
+creates or pushes the first one. A tag that already points at `HEAD` is left
+as it is, so a re-run is safe: a local one is not created again, and one that
+is already on `origin` at `HEAD` (for example an annotated tag made elsewhere)
+is neither created nor pushed. Skipped directories and unmatched patterns are
+reported once, by `verifyConditions`. The `modules` option only lists
 modules to include; there is no exclusion syntax.
 
 ## Known Issues

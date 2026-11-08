@@ -19,6 +19,12 @@ import { run, type Runner } from './utils/exec.js';
 import { redactCredentials } from './utils/redact.js';
 
 /**
+ * A logger that says nothing. Skipped directories and empty patterns are
+ * reported once, by `verifyConditions`, not again by every later step.
+ */
+const QUIET = { log: (): void => undefined, warn: (): void => undefined };
+
+/**
  * Verify that all preconditions for the plugin are met:
  *  - A root `go.mod` exists in the working directory.
  *  - `git` is available on PATH.
@@ -57,8 +63,7 @@ export async function verifyConditions(
   // A directory git cannot tag is found now, not after the release commit.
   const modules = [GoModule.open(rootGoMod), ...submodules];
   await Release.check(
-    repository,
-    modules.map((module) => module.tagName(cwd, '0.0.0')),
+    modules.map((module) => repository.tag(module.tagName(cwd, '0.0.0'))),
   );
   if (submodules.length === 0) {
     logger.log(
@@ -96,13 +101,16 @@ export async function prepare(
   const rootModule = root.modulePath();
   logger.log('Root module: %s', rootModule);
 
-  const submodules = GoModule.discover(cwd, config.modules, logger, {
+  const submodules = GoModule.discover(cwd, config.modules, QUIET, {
     run: runner,
   });
   // Stop before any file is rewritten if a tag cannot be created later.
+  const repository = GitRepository.open({ cwd, run: runner });
   await Release.plan(
-    GitRepository.open({ cwd, run: runner }),
-    [root, ...submodules].map((module) => module.tagName(cwd, version)),
+    repository,
+    [root, ...submodules].map((module) =>
+      repository.tag(module.tagName(cwd, version)),
+    ),
     config.pushTags,
   );
   if (submodules.length === 0) {
@@ -157,12 +165,13 @@ export async function publish(
 
   const modules = [
     GoModule.open(path.join(cwd, 'go.mod')),
-    ...GoModule.discover(cwd, config.modules, logger),
+    ...GoModule.discover(cwd, config.modules, QUIET),
   ];
   // Validate every tag before the first one is created or pushed.
+  const repository = GitRepository.open({ cwd, run: runner });
   const release = await Release.plan(
-    GitRepository.open({ cwd, run: runner }),
-    modules.map((module) => module.tagName(cwd, version)),
+    repository,
+    modules.map((module) => repository.tag(module.tagName(cwd, version))),
     config.pushTags,
   );
   await release.publish(logger);

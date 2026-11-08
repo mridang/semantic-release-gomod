@@ -4,7 +4,7 @@ import type {
   PublishContext,
   VerifyConditionsContext,
 } from 'semantic-release';
-import { GitRepository } from '../../src/git.js';
+import { GitRepository, type Tag } from '../../src/git.js';
 import type { Runner } from '../../src/utils/exec.js';
 import type { GomodPluginConfig } from '../../src/plugin-config.js';
 import { recordingLogger } from './logger.js';
@@ -71,6 +71,20 @@ export function mockExec(
  */
 export function repoWith(run: Runner): GitRepository {
   return GitRepository.open({ cwd: '/repo', run });
+}
+
+/**
+ * Tags of a repository, by name.
+ *
+ * @param repository The repository.
+ * @param names      The tag names.
+ * @returns A tag for each name, in order.
+ */
+export function tagsOf(
+  repository: GitRepository,
+  names: readonly string[],
+): readonly Tag[] {
+  return names.map((name) => repository.tag(name));
 }
 
 /**

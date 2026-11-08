@@ -16,7 +16,9 @@ export interface GitOptions {
  * What a `Tag` needs to run git: the repository directory and a runner.
  */
 interface TagOptions {
+  /** The repository directory. */
   readonly cwd: string;
+  /** Runs git. */
   readonly run: Runner;
 }
 
@@ -25,8 +27,11 @@ interface TagOptions {
  * read from exit statuses, never from its (localised) messages.
  */
 export class Tag {
+  /** The tag name, e.g. `assert/v1.2.3`. */
   readonly name: string;
+  /** The repository directory git runs in. */
   private readonly cwd: string;
+  /** Runs git. */
   private readonly run: Runner;
 
   /**
@@ -61,13 +66,24 @@ export class Tag {
   }
 
   /**
-   * Whether the tag exists.
+   * Whether git accepts the tag's name. A name starting with `-` is refused
+   * without asking git, which would read it as an option.
    *
-   * @returns True when the tag exists.
+   * @returns True when `git check-ref-format` accepts `refs/tags/<name>`.
+   * @throws Whatever git failed with, unless it only answered "invalid" (exit
+   * status 1).
    */
-  async exists(): Promise<boolean> {
-    const commit = await this.commit();
-    return commit !== undefined;
+  async isValid(): Promise<boolean> {
+    if (this.name.startsWith('-')) return false;
+    try {
+      await this.run('git', ['check-ref-format', `refs/tags/${this.name}`], {
+        cwd: this.cwd,
+      });
+      return true;
+    } catch (err: unknown) {
+      if (statusOf(err) === 1) return false;
+      throw err;
+    }
   }
 
   /**
@@ -97,9 +113,15 @@ export class Tag {
  * A git repository on disk.
  */
 export class GitRepository {
+  /** The repository directory every command runs in. */
   readonly cwd: string;
+  /** Runs git. */
   private readonly run: Runner;
 
+  /**
+   * @param cwd The repository directory.
+   * @param run Runs git.
+   */
   private constructor(cwd: string, run: Runner) {
     this.cwd = cwd;
     this.run = run;
@@ -154,28 +176,6 @@ export class GitRepository {
    */
   tag(name: string): Tag {
     return new Tag(name, { cwd: this.cwd, run: this.run });
-  }
-
-  /**
-   * Whether git accepts a tag name. A name starting with `-` is refused
-   * without asking git, which would read it as an option.
-   *
-   * @param name The tag name.
-   * @returns True when `git check-ref-format` accepts `refs/tags/<name>`.
-   * @throws Whatever git failed with, unless it only answered "invalid" (exit
-   * status 1).
-   */
-  async isValidTagName(name: string): Promise<boolean> {
-    if (name.startsWith('-')) return false;
-    try {
-      await this.run('git', ['check-ref-format', `refs/tags/${name}`], {
-        cwd: this.cwd,
-      });
-      return true;
-    } catch (err: unknown) {
-      if (statusOf(err) === 1) return false;
-      throw err;
-    }
   }
 
   /**

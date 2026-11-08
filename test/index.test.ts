@@ -164,6 +164,45 @@ describe('a directory name git cannot tag', () => {
   });
 });
 
+describe('skipped directories and empty patterns', () => {
+  it('are reported once, by verifyConditions, not again by prepare and publish', async () => {
+    await withTmp(
+      {
+        'go.mod': goMod(ROOT),
+        'sub/go.mod': goMod(`${ROOT}/sub`),
+        'vendor/p/go.mod': goMod('x'),
+      },
+      async (dir) => {
+        const config = { skipGoModTidy: true, pushTags: false };
+        const exec = mockExec();
+        const context = stepContext(dir);
+        await verifyConditions(config, context.verify, exec);
+        await prepare(config, context.prepare, exec);
+        await publish(config, context.publish, exec);
+        const skipped = context.lines.filter((l) =>
+          l.startsWith('Not searching'),
+        );
+        expect(skipped).toHaveLength(1);
+        expect(skipped[0]).toContain(join(dir, 'vendor'));
+      },
+    );
+  });
+
+  it('keep an unmatched pattern silent in prepare and publish', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      const config = {
+        modules: 'nowhere/go.mod',
+        skipGoModTidy: true,
+        pushTags: false,
+      };
+      const context = stepContext(dir);
+      await prepare(config, context.prepare, mockExec());
+      await publish(config, context.publish, mockExec());
+      expect(context.lines.some((l) => l.startsWith('Pattern'))).toBe(false);
+    });
+  });
+});
+
 describe('steps without a cwd in the context', () => {
   // The repository this suite runs in has no go.mod at its root.
   const noCwd = stepContext('ignored');
@@ -382,6 +421,27 @@ describe('publish in a real repository', () => {
             'refs/tags/v1.2.3',
           );
           expect(git('tag', '--list').trim()).toBe('');
+        },
+      );
+    });
+  });
+
+  it('leaves an annotated tag that is on origin at HEAD alone, and tags the rest', async () => {
+    await withTmp({}, async (remote) => {
+      await withTmp(
+        { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
+        async (dir) => {
+          const git = initRepo(dir);
+          initBare(remote);
+          git('remote', 'add', 'origin', remote);
+          git('tag', '-a', 'sub/v1.2.3', '-m', 'made elsewhere');
+          git('push', '-q', 'origin', 'refs/tags/sub/v1.2.3');
+          git('tag', '-d', 'sub/v1.2.3');
+          await publish({}, stepContext(dir).publish);
+          const remoteTags = git('ls-remote', '--tags', 'origin');
+          expect(remoteTags).toContain('refs/tags/v1.2.3');
+          expect(remoteTags).toContain('refs/tags/sub/v1.2.3^{}');
+          expect(git('tag', '--list').trim()).toBe('v1.2.3');
         },
       );
     });
