@@ -59,7 +59,7 @@ export async function verifyConditions(
     );
   }
 
-  const submodules = discoverSubmoduleGoMods(cwd, config.modules);
+  const submodules = discoverSubmoduleGoMods(cwd, config.modules, logger);
   if (submodules.length === 0) {
     logger.log(
       'No submodule go.mod files found — operating in single-module mode.',
@@ -96,7 +96,7 @@ export async function prepare(
   const rootModule = readModulePath(rootGoMod);
   logger.log('Root module: %s', rootModule);
 
-  const submodules = discoverSubmoduleGoMods(cwd, config.modules);
+  const submodules = discoverSubmoduleGoMods(cwd, config.modules, logger);
   if (submodules.length === 0) {
     logger.log('No submodules to update.');
     return;
@@ -150,7 +150,7 @@ export async function publish(
   const config = resolveConfig(pluginConfig);
 
   // All go.mod files: submodules + root
-  const submodules = discoverSubmoduleGoMods(cwd, config.modules);
+  const submodules = discoverSubmoduleGoMods(cwd, config.modules, logger);
   const allGoMods: readonly string[] = [
     path.join(cwd, 'go.mod'),
     ...submodules,

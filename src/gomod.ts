@@ -5,25 +5,17 @@ import type { VerifyConditionsContext } from 'semantic-release';
 import type { ExecFn } from './exec.js';
 
 /**
- * The part of the semantic-release context logger that tagging uses.
+ * The part of the semantic-release context logger the helpers use.
  */
-type Logger = Pick<VerifyConditionsContext['logger'], 'log'>;
+type Logger = Pick<VerifyConditionsContext['logger'], 'log' | 'warn'>;
 
 /**
- * Directories that never contain modules the plugin manages.
+ * Directories that are not searched for modules when walking the tree or
+ * expanding a wildcard: git's own data, and vendored dependencies. A literal
+ * path into one of them is still honoured. Other dot-directories such as
+ * `.tools` are searched, because they can hold real modules.
  */
-const IGNORED_DIRS: readonly string[] = ['vendor', 'node_modules'];
-
-/**
- * Whether a directory name is skipped when searching for modules: the
- * ignored directories above, and dot-directories such as `.git`.
- *
- * @param name A directory name.
- * @returns True when the directory is not searched.
- */
-function isIgnoredDir(name: string): boolean {
-  return IGNORED_DIRS.includes(name) || name.startsWith('.');
-}
+const IGNORED_DIRS: readonly string[] = ['.git', 'vendor', 'node_modules'];
 
 /**
  * Read a directory, returning an empty array on any I/O error.
@@ -40,107 +32,127 @@ function safeReadDir(dir: string): readonly fs.Dirent[] {
 }
 
 /**
- * Walk `root` recursively and return the absolute paths of every
- * go.mod file found, excluding the root-level go.mod itself.
+ * The subdirectories to descend into, skipping the ignored ones before they
+ * are read (so a huge `node_modules` is never walked). Ignored directories
+ * other than `.git` are reported, so users can see what was left out.
  *
- * When `globPatterns` are provided the walk is skipped and the
- * patterns are expanded against `root` instead.
+ * @param dir    Absolute path of the directory.
+ * @param logger Where skipped directories are reported.
+ * @returns The absolute paths of the directories to search.
+ */
+function searchableSubdirs(dir: string, logger: Logger): readonly string[] {
+  return safeReadDir(dir)
+    .filter((entry) => entry.isDirectory())
+    .flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      if (!IGNORED_DIRS.includes(entry.name)) return [full];
+      if (entry.name !== '.git') {
+        logger.log(
+          'Not searching %s for modules. Name a go.mod in it in the `modules` option to include it.',
+          full,
+        );
+      }
+      return [];
+    });
+}
+
+/**
+ * Find the submodule go.mod files: every go.mod below `root` except the
+ * root-level one, or the ones the glob patterns match.
  *
- * @param root        Absolute path to the repository root.
+ * Without patterns the tree is walked, skipping `.git`, `vendor` and
+ * `node_modules`. Patterns support literal names and whole-segment `*` and
+ * `**` wildcards, which skip the same directories; a literal path is
+ * honoured even inside them. Symlinked go.mod files are never matched. A
+ * pattern that matches nothing is reported with a warning.
+ *
+ * @param root         Absolute path to the repository root.
  * @param globPatterns Optional array of glob patterns relative to root.
+ * @param logger       Where skipped directories and empty patterns are reported.
  * @returns Sorted array of absolute go.mod paths (submodules only).
  */
 export function discoverSubmoduleGoMods(
   root: string,
-  globPatterns?: readonly string[],
+  globPatterns: readonly string[] | undefined,
+  logger: Logger,
 ): readonly string[] {
   const rootGoMod = path.join(root, 'go.mod');
-  const candidates =
-    globPatterns && globPatterns.length > 0
-      ? globPatterns.flatMap((pattern) =>
-          expandGlob(root, pattern).filter(
-            (file) =>
-              file !== rootGoMod &&
-              // A literal path was asked for by name, so it is honoured.
-              (!pattern.includes('*') || !inIgnoredDir(root, file)),
-          ),
-        )
-      : walkForGoMods(root).filter((file) => file !== rootGoMod);
-  return [...new Set(candidates)].toSorted();
-}
-
-/**
- * Whether a file is inside a `vendor`, `node_modules` or dot-directory below
- * the root. Wildcard patterns skip such files, like auto-discovery does.
- *
- * @param root Absolute path to the repository root.
- * @param file Absolute path to a file.
- * @returns True when a directory on the way from the root is ignored.
- */
-function inIgnoredDir(root: string, file: string): boolean {
-  return path.relative(root, file).split(path.sep).some(isIgnoredDir);
+  const isSubmodule = (file: string): boolean => file !== rootGoMod;
+  if (!globPatterns || globPatterns.length === 0) {
+    return walkForGoMods(root, logger).filter(isSubmodule).toSorted();
+  }
+  const found = globPatterns.map((pattern) => ({
+    pattern,
+    files: matchParts(root, pattern.split('/'), logger).filter(isSubmodule),
+  }));
+  found
+    .filter(({ files }) => files.length === 0)
+    .forEach(({ pattern }) => {
+      logger.warn(
+        'Pattern "%s" in `modules` matched no go.mod files.',
+        pattern,
+      );
+    });
+  return [...new Set(found.flatMap(({ files }) => files))].toSorted();
 }
 
 /**
  * Recursively walk `dir` and return absolute paths of all go.mod files,
- * skipping `vendor`, `node_modules` and dot-directories. Only regular files count, so a
- * symlink named go.mod is ignored.
+ * skipping the ignored directories. Only regular files count, so a symlink
+ * named go.mod is ignored.
  *
- * @param dir Absolute path of the directory to walk.
+ * @param dir    Absolute path of the directory to walk.
+ * @param logger Where skipped directories are reported.
  * @returns Every go.mod file below it, including one directly inside it.
  */
-function walkForGoMods(dir: string): readonly string[] {
-  return safeReadDir(dir).flatMap((entry) => {
-    if (isIgnoredDir(entry.name)) return [];
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) return walkForGoMods(full);
-    if (entry.isFile() && entry.name === 'go.mod') return [full];
-    return [];
-  });
+function walkForGoMods(dir: string, logger: Logger): readonly string[] {
+  const here = safeReadDir(dir)
+    .filter((entry) => entry.isFile() && entry.name === 'go.mod')
+    .map((entry) => path.join(dir, entry.name));
+  return [
+    ...here,
+    ...searchableSubdirs(dir, logger).flatMap((sub) =>
+      walkForGoMods(sub, logger),
+    ),
+  ];
 }
 
 /**
- * Minimal glob expander supporting `**` as a recursive wildcard.
- * Only handles the patterns this plugin actually uses, e.g.
- * `"assert/**\/go.mod"` or `"env/*\/go.mod"`.
- *
- * @param root    Absolute path the pattern is relative to.
- * @param pattern Glob pattern using `/` separators.
- * @returns Absolute paths of the files the pattern matches.
- */
-function expandGlob(root: string, pattern: string): readonly string[] {
-  return matchParts(root, pattern.split('/'));
-}
-
-/**
- * Match the remaining segments of a glob pattern below a directory.
+ * Match the segments of a glob pattern below a directory.
  * `**` matches zero or more directory levels, `*` exactly one, and any other
- * segment is a literal name. The last segment must be a regular file.
+ * segment is a literal name. The last segment must be a regular file (not a
+ * symlink, like in auto-discovery). Wildcards do not descend into ignored
+ * directories, but a literal segment may name one.
  *
- * @param dir   Absolute path of the directory to match in.
- * @param parts Pattern segments still to be matched.
+ * @param dir    Absolute path of the directory to match in.
+ * @param parts  Pattern segments still to be matched.
+ * @param logger Where skipped directories are reported.
  * @returns Absolute paths of the matching files.
  */
-function matchParts(dir: string, parts: readonly string[]): readonly string[] {
+function matchParts(
+  dir: string,
+  parts: readonly string[],
+  logger: Logger,
+): readonly string[] {
   if (parts.length === 0) return [];
   const [head, ...tail] = parts;
 
   if (head === '**') {
-    // Zero levels: continue with tail from current dir.
+    // Zero levels: continue with tail from the current dir.
     // One or more levels: descend into each subdirectory.
     return [
-      ...matchParts(dir, tail),
-      ...safeReadDir(dir)
-        .filter((e) => e.isDirectory())
-        .flatMap((e) => matchParts(path.join(dir, e.name), parts)),
+      ...matchParts(dir, tail, logger),
+      ...searchableSubdirs(dir, logger).flatMap((sub) =>
+        matchParts(sub, parts, logger),
+      ),
     ];
   }
 
   if (tail.length === 0) {
-    // Last segment — must be a file (single statSync avoids TOCTOU)
+    // Last segment: must be a regular file (one lstat avoids a TOCTOU race).
     const candidate = path.join(dir, head);
     try {
-      return fs.statSync(candidate).isFile() ? [candidate] : [];
+      return fs.lstatSync(candidate).isFile() ? [candidate] : [];
     } catch {
       return [];
     }
@@ -148,13 +160,13 @@ function matchParts(dir: string, parts: readonly string[]): readonly string[] {
 
   if (head === '*') {
     // Single-level wildcard
-    return safeReadDir(dir)
-      .filter((e) => e.isDirectory())
-      .flatMap((e) => matchParts(path.join(dir, e.name), tail));
+    return searchableSubdirs(dir, logger).flatMap((sub) =>
+      matchParts(sub, tail, logger),
+    );
   }
 
-  // Literal segment — safeReadDir handles missing/unreadable paths gracefully
-  return matchParts(path.join(dir, head), tail);
+  // Literal segment: a missing or unreadable path simply matches nothing.
+  return matchParts(path.join(dir, head), tail, logger);
 }
 
 /**

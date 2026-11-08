@@ -13,12 +13,24 @@ import { commandsOf, HEAD, mockExec, mockLogger } from './utils/context.js';
 import { goMod } from './utils/go-mod.js';
 import { withTmp } from './utils/tmpdir.js';
 
+/**
+ * Discover submodules, ignoring what is logged.
+ *
+ * @param root Repository root.
+ * @param patterns Optional glob patterns.
+ * @returns The go.mod files found.
+ */
+const discover = (
+  root: string,
+  patterns?: readonly string[],
+): readonly string[] => discoverSubmoduleGoMods(root, patterns, mockLogger());
+
 describe('discoverSubmoduleGoMods', () => {
   it('returns an empty array when only the root go.mod exists', async () => {
     await withTmp(
       { 'go.mod': goMod('github.com/example/repo') },
       async (dir) => {
-        expect(discoverSubmoduleGoMods(dir)).toEqual([]);
+        expect(discover(dir)).toEqual([]);
       },
     );
   });
@@ -31,7 +43,7 @@ describe('discoverSubmoduleGoMods', () => {
         'pkg/a/go.mod': goMod('github.com/example/repo/pkg/a'),
       },
       async (dir) => {
-        expect(discoverSubmoduleGoMods(dir)).toEqual([
+        expect(discover(dir)).toEqual([
           join(dir, 'pkg/a/go.mod'),
           join(dir, 'pkg/b/go.mod'),
         ]);
@@ -48,9 +60,7 @@ describe('discoverSubmoduleGoMods', () => {
         'other/baz/go.mod': goMod('github.com/example/repo/other/baz'),
       },
       async (dir) => {
-        expect(
-          discoverSubmoduleGoMods(dir, ['assert/**/go.mod', 'env/**/go.mod']),
-        ).toEqual([
+        expect(discover(dir, ['assert/**/go.mod', 'env/**/go.mod'])).toEqual([
           join(dir, 'assert/foo/go.mod'),
           join(dir, 'env/bar/go.mod'),
         ]);
@@ -58,7 +68,7 @@ describe('discoverSubmoduleGoMods', () => {
     );
   });
 
-  it.each([['**/go.mod'], ['*/go.mod'], ['go.mod'], ['vendor/*/go.mod']])(
+  it.each([['**/go.mod'], ['*/go.mod'], ['go.mod']])(
     'applies the same exclusions to the glob %s as to auto-discovery',
     async (pattern) => {
       await withTmp(
@@ -69,7 +79,7 @@ describe('discoverSubmoduleGoMods', () => {
           'node_modules/p/go.mod': goMod('github.com/example/npm'),
         },
         async (dir) => {
-          const found = discoverSubmoduleGoMods(dir, [pattern]);
+          const found = discover(dir, [pattern]);
           expect(found).not.toContain(join(dir, 'go.mod'));
           expect(found.filter((f) => /vendor|node_modules/.test(f))).toEqual(
             [],
@@ -79,33 +89,131 @@ describe('discoverSubmoduleGoMods', () => {
     },
   );
 
-  it.each([[undefined], [['**/go.mod']]])(
-    'skips .git and other dot-directories (patterns %j)',
+  it.each([[undefined], [['**/go.mod']], [['*/*/go.mod']]])(
+    'skips .git but searches other dot-directories (patterns %j)',
     async (patterns) => {
       await withTmp(
         {
           'go.mod': goMod('github.com/example/repo'),
-          'sub/go.mod': goMod('github.com/example/repo/sub'),
           '.git/modules/x/go.mod': goMod('github.com/example/git'),
-          '.cache/y/go.mod': goMod('github.com/example/cache'),
-          'sub/.hidden/go.mod': goMod('github.com/example/hidden'),
+          '.tools/y/go.mod': goMod('github.com/example/repo/.tools/y'),
+          '.ci/go.mod': goMod('github.com/example/repo/.ci'),
         },
         async (dir) => {
-          expect(discoverSubmoduleGoMods(dir, patterns)).toEqual([
-            join(dir, 'sub/go.mod'),
-          ]);
+          expect(discover(dir, patterns)).toEqual(
+            expect.arrayContaining([join(dir, '.tools/y/go.mod')]),
+          );
+          expect(discover(dir, patterns)).not.toContain(
+            join(dir, '.git/modules/x/go.mod'),
+          );
         },
       );
     },
   );
 
-  it('honours a literal path into a dot-directory', async () => {
+  it('finds the modules in .tools and .ci that auto-discovery always found', async () => {
     await withTmp(
-      { '.mods/x/go.mod': goMod('github.com/example/x') },
+      {
+        'go.mod': goMod('github.com/example/repo'),
+        '.tools/go.mod': goMod('github.com/example/repo/.tools'),
+        '.ci/go.mod': goMod('github.com/example/repo/.ci'),
+      },
       async (dir) => {
-        expect(discoverSubmoduleGoMods(dir, ['.mods/x/go.mod'])).toEqual([
-          join(dir, '.mods/x/go.mod'),
+        expect(discover(dir)).toEqual([
+          join(dir, '.ci/go.mod'),
+          join(dir, '.tools/go.mod'),
         ]);
+      },
+    );
+  });
+
+  it('logs each ignored directory it does not search, but not .git', async () => {
+    await withTmp(
+      {
+        'go.mod': goMod('github.com/example/repo'),
+        'vendor/p/go.mod': goMod('github.com/example/vendored'),
+        'sub/node_modules/q/go.mod': goMod('github.com/example/npm'),
+        '.git/x': '',
+      },
+      async (dir) => {
+        const logger = mockLogger();
+        discoverSubmoduleGoMods(dir, undefined, logger);
+        const skipped = logger.log.mock.calls.map(([, path]) => path);
+        expect(skipped).toEqual(
+          expect.arrayContaining([
+            join(dir, 'vendor'),
+            join(dir, 'sub/node_modules'),
+          ]),
+        );
+        expect(skipped).not.toContain(join(dir, '.git'));
+      },
+    );
+  });
+
+  it.each([['**/go.mod'], ['*/*/go.mod'], ['*/**/go.mod']])(
+    'prunes ignored directories while expanding %s, instead of filtering afterwards',
+    async (pattern) => {
+      await withTmp(
+        {
+          'sub/go.mod': goMod('github.com/example/repo/sub'),
+          'node_modules/a/b/go.mod': goMod('x'),
+          'vendor/a/go.mod': goMod('x'),
+        },
+        async (dir) => {
+          const logger = mockLogger();
+          discoverSubmoduleGoMods(dir, [pattern], logger);
+          // The directories are reported when the walk reaches them, so
+          // their contents are never listed.
+          expect(logger.log.mock.calls.map(([, skipped]) => skipped)).toEqual(
+            expect.arrayContaining([
+              join(dir, 'node_modules'),
+              join(dir, 'vendor'),
+            ]),
+          );
+          expect(logger.log.mock.calls.length).toBe(2);
+        },
+      );
+    },
+  );
+
+  it('warns about a pattern that matches nothing, and still returns the rest', async () => {
+    await withTmp(
+      { 'sub/go.mod': goMod('github.com/example/repo/sub') },
+      async (dir) => {
+        const logger = mockLogger();
+        expect(
+          discoverSubmoduleGoMods(dir, ['sub/go.mod', 'svc/*/go.mod'], logger),
+        ).toEqual([join(dir, 'sub/go.mod')]);
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+        expect(logger.warn).toHaveBeenCalledWith(
+          'Pattern "%s" in `modules` matched no go.mod files.',
+          'svc/*/go.mod',
+        );
+      },
+    );
+  });
+
+  it('decides what to skip per matched segment, not per pattern', async () => {
+    await withTmp(
+      {
+        'vendor/x/a/go.mod': goMod('github.com/example/a'),
+        'vendor/x/node_modules/b/go.mod': goMod('github.com/example/b'),
+      },
+      async (dir) => {
+        expect(discover(dir, ['vendor/x/*/go.mod'])).toEqual([
+          join(dir, 'vendor/x/a/go.mod'),
+        ]);
+      },
+    );
+  });
+
+  it('ignores a symlinked go.mod in a glob exactly as auto-discovery does', async () => {
+    await withTmp(
+      { 'a/go.mod': goMod('github.com/example/repo/a'), 'link/keep': '' },
+      async (dir) => {
+        await symlink(join(dir, 'a/go.mod'), join(dir, 'link/go.mod'));
+        expect(discover(dir, ['*/go.mod'])).toEqual([join(dir, 'a/go.mod')]);
+        expect(discover(dir)).toEqual([join(dir, 'a/go.mod')]);
       },
     );
   });
@@ -119,11 +227,7 @@ describe('discoverSubmoduleGoMods', () => {
       },
       async (dir) => {
         expect(
-          discoverSubmoduleGoMods(dir, [
-            'vendor/x/go.mod',
-            'node_modules/y/go.mod',
-            'go.mod',
-          ]),
+          discover(dir, ['vendor/x/go.mod', 'node_modules/y/go.mod', 'go.mod']),
         ).toEqual([
           join(dir, 'node_modules/y/go.mod'),
           join(dir, 'vendor/x/go.mod'),
@@ -140,9 +244,7 @@ describe('discoverSubmoduleGoMods', () => {
         'vendor/p/go.mod': goMod('github.com/example/vendored'),
       },
       async (dir) => {
-        expect(discoverSubmoduleGoMods(dir, ['**/go.mod'])).toEqual([
-          join(dir, 'sub/go.mod'),
-        ]);
+        expect(discover(dir, ['**/go.mod'])).toEqual([join(dir, 'sub/go.mod')]);
       },
     );
   });
@@ -151,9 +253,9 @@ describe('discoverSubmoduleGoMods', () => {
     await withTmp(
       { 'pkg/a/go.mod': goMod('github.com/example/repo/pkg/a') },
       async (dir) => {
-        expect(
-          discoverSubmoduleGoMods(dir, ['pkg/*/go.mod', 'pkg/**/go.mod']),
-        ).toEqual([join(dir, 'pkg/a/go.mod')]);
+        expect(discover(dir, ['pkg/*/go.mod', 'pkg/**/go.mod'])).toEqual([
+          join(dir, 'pkg/a/go.mod'),
+        ]);
       },
     );
   });
@@ -166,7 +268,7 @@ describe('discoverSubmoduleGoMods', () => {
         'node_modules/pkg/go.mod': goMod('github.com/example/npm'),
       },
       async (dir) => {
-        expect(discoverSubmoduleGoMods(dir)).toEqual([]);
+        expect(discover(dir)).toEqual([]);
       },
     );
   });
@@ -179,7 +281,7 @@ describe('discoverSubmoduleGoMods', () => {
         'pkg/b/deep/go.mod': goMod('github.com/example/repo/pkg/b/deep'),
       },
       async (dir) => {
-        expect(discoverSubmoduleGoMods(dir, ['pkg/*/go.mod'])).toEqual([
+        expect(discover(dir, ['pkg/*/go.mod'])).toEqual([
           join(dir, 'pkg/a/go.mod'),
           join(dir, 'pkg/b/go.mod'),
         ]);
@@ -191,16 +293,16 @@ describe('discoverSubmoduleGoMods', () => {
     await withTmp(
       { 'sub/go.mod': goMod('github.com/example/repo/sub') },
       async (dir) => {
-        expect(
-          discoverSubmoduleGoMods(dir, ['sub/go.mod', 'missing/go.mod']),
-        ).toEqual([join(dir, 'sub/go.mod')]);
+        expect(discover(dir, ['sub/go.mod', 'missing/go.mod'])).toEqual([
+          join(dir, 'sub/go.mod'),
+        ]);
       },
     );
   });
 
   it('ignores a glob that matches a directory instead of a file', async () => {
     await withTmp({ 'sub/go.mod/keep': '' }, async (dir) => {
-      expect(discoverSubmoduleGoMods(dir, ['sub/go.mod'])).toEqual([]);
+      expect(discover(dir, ['sub/go.mod'])).toEqual([]);
     });
   });
 
@@ -209,9 +311,7 @@ describe('discoverSubmoduleGoMods', () => {
       { 'real/go.mod': goMod('github.com/example/repo/real'), 'sub/keep': '' },
       async (dir) => {
         await symlink(join(dir, 'real/go.mod'), join(dir, 'sub/go.mod'));
-        expect(discoverSubmoduleGoMods(dir)).toEqual([
-          join(dir, 'real/go.mod'),
-        ]);
+        expect(discover(dir)).toEqual([join(dir, 'real/go.mod')]);
       },
     );
   });
@@ -220,22 +320,20 @@ describe('discoverSubmoduleGoMods', () => {
     await withTmp(
       { 'sub/go.mod': goMod('github.com/example/repo/sub') },
       async (dir) => {
-        expect(discoverSubmoduleGoMods(dir, ['sub/**'])).toEqual([]);
+        expect(discover(dir, ['sub/**'])).toEqual([]);
       },
     );
   });
 
   it('returns nothing for a root that cannot be read', () => {
-    expect(discoverSubmoduleGoMods('/nonexistent-gomod-root')).toEqual([]);
+    expect(discover('/nonexistent-gomod-root')).toEqual([]);
   });
 
   it('falls back to auto-discovery for an empty pattern list', async () => {
     await withTmp(
       { 'sub/go.mod': goMod('github.com/example/repo/sub') },
       async (dir) => {
-        expect(discoverSubmoduleGoMods(dir, [])).toEqual([
-          join(dir, 'sub/go.mod'),
-        ]);
+        expect(discover(dir, [])).toEqual([join(dir, 'sub/go.mod')]);
       },
     );
   });
