@@ -1,14 +1,13 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import type { VerifyConditionsContext } from 'semantic-release';
 import { defaultExec, type ExecFn } from './exec.js';
+import { messageOf } from './utils/error.js';
 
 /**
- * Minimal logger interface compatible with the semantic-release context logger.
+ * The part of the semantic-release context logger that tagging uses.
  */
-interface Logger {
-  log(message: string, ...args: unknown[]): void;
-  warn(message: string, ...args: unknown[]): void;
-}
+type Logger = Pick<VerifyConditionsContext['logger'], 'log'>;
 
 /**
  * Read a directory, returning an empty array on any I/O error.
@@ -40,13 +39,13 @@ export function discoverSubmoduleGoMods(
     const results = globPatterns.flatMap((pattern) =>
       expandGlob(root, pattern),
     );
-    return [...new Set(results)].sort();
+    return [...new Set(results)].toSorted();
   }
 
   // Auto-discover: walk the tree
   return walkForGoMods(root)
     .filter((f) => f !== path.join(root, 'go.mod'))
-    .sort();
+    .toSorted();
 }
 
 /**
@@ -116,11 +115,14 @@ function matchParts(dir: string, parts: readonly string[]): readonly string[] {
  */
 export function readModulePath(goModPath: string): string {
   const content = fs.readFileSync(goModPath, 'utf8');
-  for (const line of content.split('\n')) {
-    const m = line.match(/^module\s+(\S+)/);
-    if (m) return m[1];
+  const declared = content
+    .split('\n')
+    .map((line) => /^module\s+(\S+)/.exec(line)?.[1])
+    .find((name) => name !== undefined);
+  if (declared === undefined) {
+    throw new Error(`No module declaration found in ${goModPath}`);
   }
-  throw new Error(`No module declaration found in ${goModPath}`);
+  return declared;
 }
 
 /**
@@ -187,8 +189,7 @@ export function createAndPushTag(
     exec(`git tag "${tag}"`, { cwd: repoRoot, stdio: 'pipe' });
     logger.log('Created tag %s', tag);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('already exists')) {
+    if (messageOf(err).includes('already exists')) {
       logger.log('Tag %s already exists, skipping', tag);
     } else {
       throw err;

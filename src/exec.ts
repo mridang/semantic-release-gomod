@@ -1,4 +1,7 @@
-import { execSync as nodeExecSync, type ExecSyncOptions } from 'child_process';
+import {
+  execSync as nodeExecSync,
+  type ExecSyncOptions,
+} from 'node:child_process';
 
 /**
  * A function that executes a shell command synchronously.

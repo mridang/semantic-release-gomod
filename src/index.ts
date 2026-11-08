@@ -1,5 +1,5 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type {
   PrepareContext,
   PublishContext,
@@ -7,7 +7,7 @@ import type {
 } from 'semantic-release';
 import SemanticReleaseError from '@semantic-release/error';
 import { defaultExec, type ExecFn } from './exec.js';
-import { GomodConfig, GomodPluginConfig } from './plugin-config.js';
+import { resolveConfig, type GomodPluginConfig } from './plugin-config.js';
 import {
   createAndPushTag,
   deriveTagPrefix,
@@ -15,6 +15,7 @@ import {
   readModulePath,
   updateGoModRequires,
 } from './gomod.js';
+import { messageOf } from './utils/error.js';
 
 /**
  * Verify that all preconditions for the plugin are met:
@@ -36,7 +37,7 @@ export async function verifyConditions(
 ): Promise<void> {
   const { logger } = context;
   const cwd = context.cwd ?? process.cwd();
-  const config = new GomodConfig(pluginConfig);
+  const config = resolveConfig(pluginConfig);
 
   const rootGoMod = path.join(cwd, 'go.mod');
   if (!fs.existsSync(rootGoMod)) {
@@ -57,7 +58,7 @@ export async function verifyConditions(
     );
   }
 
-  const submodules = discoverSubmoduleGoMods(cwd, config.getModules());
+  const submodules = discoverSubmoduleGoMods(cwd, config.modules);
   if (submodules.length === 0) {
     logger.log(
       'No submodule go.mod files found — operating in single-module mode.',
@@ -88,13 +89,13 @@ export async function prepare(
     nextRelease: { version },
   } = context;
   const cwd = context.cwd ?? process.cwd();
-  const config = new GomodConfig(pluginConfig);
+  const config = resolveConfig(pluginConfig);
 
   const rootGoMod = path.join(cwd, 'go.mod');
   const rootModule = readModulePath(rootGoMod);
   logger.log('Root module: %s', rootModule);
 
-  const submodules = discoverSubmoduleGoMods(cwd, config.getModules());
+  const submodules = discoverSubmoduleGoMods(cwd, config.modules);
   if (submodules.length === 0) {
     logger.log('No submodules to update.');
     return;
@@ -104,17 +105,16 @@ export async function prepare(
     logger.log('Pinning requires in %s', path.relative(cwd, goModPath));
     updateGoModRequires(goModPath, rootModule, version);
 
-    if (!config.isSkipGoModTidy()) {
+    if (!config.skipGoModTidy) {
       const modDir = path.dirname(goModPath);
       try {
         exec('go mod tidy', { cwd: modDir, stdio: 'pipe' });
         logger.log('go mod tidy OK in %s', path.relative(cwd, modDir));
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
         logger.warn(
           'go mod tidy failed in %s: %s',
           path.relative(cwd, modDir),
-          msg,
+          messageOf(err),
         );
       }
     }
@@ -146,10 +146,10 @@ export async function publish(
     nextRelease: { version },
   } = context;
   const cwd = context.cwd ?? process.cwd();
-  const config = new GomodConfig(pluginConfig);
+  const config = resolveConfig(pluginConfig);
 
   // All go.mod files: submodules + root
-  const submodules = discoverSubmoduleGoMods(cwd, config.getModules());
+  const submodules = discoverSubmoduleGoMods(cwd, config.modules);
   const allGoMods: readonly string[] = [
     path.join(cwd, 'go.mod'),
     ...submodules,
@@ -158,7 +158,7 @@ export async function publish(
   for (const goModPath of allGoMods) {
     const prefix = deriveTagPrefix(goModPath, cwd);
     const tag = prefix ? `${prefix}/v${version}` : `v${version}`;
-    createAndPushTag(cwd, tag, config.isPushTagsEnabled(), logger, exec);
+    createAndPushTag(cwd, tag, config.pushTags, logger, exec);
   }
 
   logger.log('Tagged %d module(s) at v%s.', allGoMods.length, version);

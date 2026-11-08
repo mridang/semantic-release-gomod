@@ -32,42 +32,40 @@ export interface GomodPluginConfig extends Config {
 }
 
 /**
- * GomodConfig wraps the raw plugin config and exposes derived values
- * with sensible defaults. It centralises option reading so the plugin
- * lifecycle hooks stay small and consistent.
+ * The plugin options with their defaults applied, so the lifecycle steps read
+ * plain values instead of repeating the defaulting rules.
  */
-export class GomodConfig {
-  constructor(private readonly config: GomodPluginConfig) {}
+export interface ResolvedConfig {
+  /**
+   * Glob patterns for submodule go.mod files, or undefined to auto-discover.
+   */
+  readonly modules: readonly string[] | undefined;
 
   /**
-   * Returns the user-supplied glob patterns for submodule go.mod files,
-   * normalised to an array. Returns undefined when not configured,
-   * which signals the plugin to auto-discover.
-   *
-   * @returns Readonly array of glob strings, or undefined for auto-detection.
+   * True only when `skipGoModTidy` is explicitly set to true.
    */
-  getModules(): readonly string[] | undefined {
-    const { modules } = this.config;
-    if (!modules) return undefined;
-    if (typeof modules === 'string') return [modules];
-    return modules;
-  }
+  readonly skipGoModTidy: boolean;
 
   /**
-   * Whether to skip `go mod tidy` after pinning submodule versions.
-   *
-   * @returns true only when explicitly set to true.
+   * True unless `pushTags` is explicitly set to false.
    */
-  isSkipGoModTidy(): boolean {
-    return this.config.skipGoModTidy === true;
-  }
+  readonly pushTags: boolean;
+}
 
-  /**
-   * Whether to push submodule tags to origin after creating them.
-   *
-   * @returns true unless explicitly disabled.
-   */
-  isPushTagsEnabled(): boolean {
-    return this.config.pushTags !== false;
-  }
+/**
+ * Apply the defaults to the user-supplied options. A single glob string is
+ * normalised to an array, and an unset `modules` stays undefined, which
+ * signals the plugin to auto-discover.
+ *
+ * @param config The plugin configuration.
+ * @returns The resolved options.
+ */
+export function resolveConfig(config: GomodPluginConfig): ResolvedConfig {
+  const { modules } = config;
+  return {
+    modules:
+      typeof modules === 'string' ? (modules ? [modules] : undefined) : modules,
+    skipGoModTidy: config.skipGoModTidy === true,
+    pushTags: config.pushTags !== false,
+  };
 }
