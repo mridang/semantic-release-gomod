@@ -1,22 +1,43 @@
-import {
-  execSync as nodeExecSync,
-  type ExecSyncOptions,
-} from 'node:child_process';
+import { execFileSync, type ExecFileSyncOptions } from 'node:child_process';
+import { messageOf, redactCredentials } from './utils/error.js';
 
 /**
- * A function that executes a shell command synchronously.
+ * A function that runs a program synchronously, without a shell. The program
+ * and each argument are passed separately, so values such as tag names and
+ * directory names are never interpreted as shell syntax.
  * Accepting this as a parameter makes the callers unit-testable
  * without needing to mock Node.js built-in modules.
  *
- * Implementations must throw when the command exits with a non-zero
- * status (matching the default behaviour of Node's `execSync`).
- * Callers are responsible for catching and handling failures.
+ * Implementations must throw when the program exits with a non-zero
+ * status. Callers are responsible for catching and handling failures.
  */
-export type ExecFn = (cmd: string, opts?: ExecSyncOptions) => void;
+export type ExecFn = (
+  file: string,
+  args: readonly string[],
+  opts?: ExecFileSyncOptions,
+) => void;
 
 /**
- * Default executor that delegates to Node's built-in `execSync`.
+ * The largest output, in bytes, a child process may write before it is
+ * killed. Node's default of 1 MiB makes chatty `go mod tidy` or git output
+ * fail with `ENOBUFS`.
  */
-export const defaultExec: ExecFn = (cmd, opts) => {
-  nodeExecSync(cmd, opts);
+const MAX_BUFFER = 64 * 1024 * 1024;
+
+/**
+ * Default executor that delegates to Node's `execFileSync`. A failure is
+ * rethrown with credentials in URLs (such as a token in a remote) redacted
+ * from its message, since git echoes the remote in its errors.
+ *
+ * @param file The program to run.
+ * @param args Its arguments.
+ * @param opts Options passed to `execFileSync`.
+ * @throws Error when the program cannot be run or exits unsuccessfully.
+ */
+export const defaultExec: ExecFn = (file, args, opts) => {
+  try {
+    execFileSync(file, args, { maxBuffer: MAX_BUFFER, ...opts });
+  } catch (err: unknown) {
+    throw new Error(redactCredentials(messageOf(err)));
+  }
 };

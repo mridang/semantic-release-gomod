@@ -250,7 +250,7 @@ export function deriveTagPrefix(
  */
 function tagExists(repoRoot: string, tag: string, exec: ExecFn): boolean {
   try {
-    exec(`git rev-parse -q --verify "refs/tags/${tag}"`, {
+    exec('git', ['rev-parse', '-q', '--verify', `refs/tags/${tag}`], {
       cwd: repoRoot,
       stdio: 'pipe',
     });
@@ -281,12 +281,12 @@ export function createAndPushTag(
   if (tagExists(repoRoot, tag, exec)) {
     logger.log('Tag %s already exists, skipping', tag);
   } else {
-    exec(`git tag "${tag}"`, { cwd: repoRoot, stdio: 'pipe' });
+    exec('git', ['tag', tag], { cwd: repoRoot, stdio: 'pipe' });
     logger.log('Created tag %s', tag);
   }
 
   if (push) {
-    exec(`git push origin "refs/tags/${tag}"`, {
+    exec('git', ['push', 'origin', `refs/tags/${tag}`], {
       cwd: repoRoot,
       stdio: 'pipe',
     });

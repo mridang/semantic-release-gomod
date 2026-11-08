@@ -1,9 +1,15 @@
 import { describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import plugin, { prepare, publish, verifyConditions } from '../src/index.js';
-import { mockExec, rawConfig, stepContext } from './utils/context.js';
+import {
+  commandsOf,
+  mockExec,
+  rawConfig,
+  stepContext,
+} from './utils/context.js';
 import { goMod } from './utils/go-mod.js';
 import { withTmp } from './utils/tmpdir.js';
 
@@ -22,7 +28,9 @@ describe('verifyConditions', () => {
       await expect(
         verifyConditions({}, stepContext(dir).verify, exec),
       ).resolves.toBeUndefined();
-      expect(exec).toHaveBeenCalledWith('git --version', { stdio: 'pipe' });
+      expect(exec).toHaveBeenCalledWith('git', ['--version'], {
+        stdio: 'pipe',
+      });
     });
   });
 
@@ -120,7 +128,8 @@ describe('steps without a cwd in the context', () => {
     const exec = mockExec();
     await publish({}, { ...noCwd.publish, cwd: undefined }, exec);
     expect(exec).toHaveBeenCalledWith(
-      'git tag "v1.2.3"',
+      'git',
+      ['tag', 'v1.2.3'],
       expect.objectContaining({ cwd: process.cwd() }),
     );
   });
@@ -158,7 +167,7 @@ describe('prepare', () => {
       const exec = mockExec();
       const { prepare: ctx, logger } = stepContext(dir, '2.0.0');
       await prepare({}, ctx, exec);
-      expect(exec).toHaveBeenCalledWith('go mod tidy', {
+      expect(exec).toHaveBeenCalledWith('go', ['mod', 'tidy'], {
         cwd: join(dir, 'sub'),
         stdio: 'pipe',
       });
@@ -219,6 +228,21 @@ describe('prepare', () => {
     });
   });
 
+  it('redacts credentials in URLs from the go mod tidy warning', async () => {
+    await withTmp(files, async (dir) => {
+      const exec = mockExec(() => {
+        throw new Error('go: https://user:s3cret@proxy.example.com/x failed');
+      });
+      const { prepare: ctx, logger } = stepContext(dir, '2.0.0');
+      await prepare({}, ctx, exec);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'go mod tidy failed in %s: %s',
+        'sub',
+        'go: https://***@proxy.example.com/x failed',
+      );
+    });
+  });
+
   it('fails when the root go.mod has no module declaration', async () => {
     await withTmp({ 'go.mod': 'go 1.21\n' }, async (dir) => {
       await expect(
@@ -251,13 +275,47 @@ describe('publish', () => {
   });
 });
 
+describe('publish with hostile directory names', () => {
+  it.each([
+    ['a command substitution', '$(touch${IFS}INJECTED)'],
+    ['backticks', '`touch${IFS}INJECTED`'],
+    ['quotes and a semicolon', 'a";touch${IFS}INJECTED;"b\'c'],
+  ])(
+    'tags a directory named with %s without running a shell',
+    async (_name, name) => {
+      await withTmp(
+        { 'go.mod': goMod(ROOT), [`${name}/go.mod`]: goMod(`${ROOT}/x`) },
+        async (dir) => {
+          const git = (...args: readonly string[]): string =>
+            execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+          git('init', '-q');
+          git(
+            '-c',
+            'user.name=test',
+            '-c',
+            'user.email=test@example.com',
+            'commit',
+            '-q',
+            '--allow-empty',
+            '-m',
+            'init',
+          );
+          await publish({ pushTags: false }, stepContext(dir).publish);
+          expect(git('tag', '--list').split('\n')).toContain(`${name}/v1.2.3`);
+          expect(existsSync(join(dir, 'INJECTED'))).toBe(false);
+        },
+      );
+    },
+  );
+});
+
 describe('publish with a mocked executor', () => {
   const files = {
     'go.mod': goMod(ROOT),
     'pkg/foo/go.mod': goMod(`${ROOT}/pkg/foo`),
   };
   const commands = (exec: ReturnType<typeof mockExec>): readonly string[] =>
-    exec.mock.calls.map(([cmd]) => cmd);
+    commandsOf(exec);
 
   it('creates and pushes tags for the root and every submodule', async () => {
     await withTmp(files, async (dir) => {
@@ -265,12 +323,12 @@ describe('publish with a mocked executor', () => {
       const { publish: ctx, logger } = stepContext(dir);
       await publish({}, ctx, exec);
       expect(commands(exec)).toEqual([
-        'git rev-parse -q --verify "refs/tags/v1.2.3"',
-        'git tag "v1.2.3"',
-        'git push origin "refs/tags/v1.2.3"',
-        'git rev-parse -q --verify "refs/tags/pkg/foo/v1.2.3"',
-        'git tag "pkg/foo/v1.2.3"',
-        'git push origin "refs/tags/pkg/foo/v1.2.3"',
+        'git rev-parse -q --verify refs/tags/v1.2.3',
+        'git tag v1.2.3',
+        'git push origin refs/tags/v1.2.3',
+        'git rev-parse -q --verify refs/tags/pkg/foo/v1.2.3',
+        'git tag pkg/foo/v1.2.3',
+        'git push origin refs/tags/pkg/foo/v1.2.3',
       ]);
       expect(logger.log).toHaveBeenCalledWith(
         'Tagged %d module(s) at v%s.',
@@ -285,7 +343,7 @@ describe('publish with a mocked executor', () => {
       const exec = mockExec();
       await publish({ pushTags: false }, stepContext(dir).publish, exec);
       expect(commands(exec).filter((cmd) => cmd.startsWith('git tag'))).toEqual(
-        ['git tag "v1.2.3"', 'git tag "pkg/foo/v1.2.3"'],
+        ['git tag v1.2.3', 'git tag pkg/foo/v1.2.3'],
       );
       expect(commands(exec).some((cmd) => cmd.includes('push'))).toBe(false);
     });
@@ -298,8 +356,8 @@ describe('publish with a mocked executor', () => {
         publish({}, stepContext(dir).publish, exec),
       ).resolves.toBeUndefined();
       expect(commands(exec)).toEqual([
-        'git rev-parse -q --verify "refs/tags/v1.2.3"',
-        'git push origin "refs/tags/v1.2.3"',
+        'git rev-parse -q --verify refs/tags/v1.2.3',
+        'git push origin refs/tags/v1.2.3',
       ]);
     });
   });

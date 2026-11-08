@@ -15,7 +15,7 @@ import {
   readModulePath,
   updateGoModRequires,
 } from './gomod.js';
-import { messageOf } from './utils/error.js';
+import { messageOf, redactCredentials } from './utils/error.js';
 
 /**
  * Verify that all preconditions for the plugin are met:
@@ -49,7 +49,7 @@ export async function verifyConditions(
   }
 
   try {
-    exec('git --version', { stdio: 'pipe' });
+    exec('git', ['--version'], { stdio: 'pipe' });
   } catch {
     throw new SemanticReleaseError(
       'git is not available.',
@@ -108,13 +108,13 @@ export async function prepare(
     if (!config.skipGoModTidy) {
       const modDir = path.dirname(goModPath);
       try {
-        exec('go mod tidy', { cwd: modDir, stdio: 'pipe' });
+        exec('go', ['mod', 'tidy'], { cwd: modDir, stdio: 'pipe' });
         logger.log('go mod tidy OK in %s', path.relative(cwd, modDir));
       } catch (err: unknown) {
         logger.warn(
           'go mod tidy failed in %s: %s',
           path.relative(cwd, modDir),
-          messageOf(err),
+          redactCredentials(messageOf(err)),
         );
       }
     }

@@ -8,7 +8,7 @@ import {
   readModulePath,
   updateGoModRequires,
 } from '../src/gomod.js';
-import { mockExec, mockLogger } from './utils/context.js';
+import { commandsOf, mockExec, mockLogger } from './utils/context.js';
 import { goMod } from './utils/go-mod.js';
 import { withTmp } from './utils/tmpdir.js';
 
@@ -435,28 +435,41 @@ describe('deriveTagPrefix', () => {
 });
 
 describe('createAndPushTag', () => {
-  const verify = 'git rev-parse -q --verify "refs/tags/v1.2.3"';
+  const verify = 'git rev-parse -q --verify refs/tags/v1.2.3';
 
   it('creates and pushes the tag', () => {
     const exec = mockExec();
     const logger = mockLogger();
     createAndPushTag('/repo', 'v1.2.3', true, logger, exec);
+    const options = { cwd: '/repo', stdio: 'pipe' };
     expect(exec.mock.calls).toEqual([
-      [verify, { cwd: '/repo', stdio: 'pipe' }],
-      ['git tag "v1.2.3"', { cwd: '/repo', stdio: 'pipe' }],
-      ['git push origin "refs/tags/v1.2.3"', { cwd: '/repo', stdio: 'pipe' }],
+      ['git', ['rev-parse', '-q', '--verify', 'refs/tags/v1.2.3'], options],
+      ['git', ['tag', 'v1.2.3'], options],
+      ['git', ['push', 'origin', 'refs/tags/v1.2.3'], options],
     ]);
     expect(logger.log).toHaveBeenCalledWith('Created tag %s', 'v1.2.3');
     expect(logger.log).toHaveBeenCalledWith('Pushed tag %s', 'v1.2.3');
   });
 
+  it.each([
+    ['a semicolon', 'a;b/v1.0.0'],
+    ['a command substitution', '$(id)/v1.0.0'],
+    ['quotes and backticks', '"a\'`b/v1.0.0'],
+    ['spaces', 'a b/v1.0.0'],
+  ])('passes a tag with %s as one argument', (_name, tag) => {
+    const exec = mockExec();
+    createAndPushTag('/repo', tag, true, mockLogger(), exec);
+    expect(exec.mock.calls.map(([file, args]) => [file, args.at(-1)])).toEqual([
+      ['git', `refs/tags/${tag}`],
+      ['git', tag],
+      ['git', `refs/tags/${tag}`],
+    ]);
+  });
+
   it('only creates the tag when push is off', () => {
     const exec = mockExec();
     createAndPushTag('/repo', 'v1.2.3', false, mockLogger(), exec);
-    expect(exec.mock.calls.map(([cmd]) => cmd)).toEqual([
-      verify,
-      'git tag "v1.2.3"',
-    ]);
+    expect(commandsOf(exec)).toEqual([verify, 'git tag v1.2.3']);
   });
 
   it('skips an existing tag, whatever language git speaks, and still pushes', () => {
@@ -467,9 +480,9 @@ describe('createAndPushTag', () => {
       'Tag %s already exists, skipping',
       'v1.2.3',
     );
-    expect(exec.mock.calls.map(([cmd]) => cmd)).toEqual([
+    expect(commandsOf(exec)).toEqual([
       verify,
-      'git push origin "refs/tags/v1.2.3"',
+      'git push origin refs/tags/v1.2.3',
     ]);
   });
 
