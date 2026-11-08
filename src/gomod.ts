@@ -194,10 +194,18 @@ export function updateGoModRequires(
  *
  * @param goModPath Absolute path to the go.mod file.
  * @param repoRoot  Absolute path to the repository root.
- * @returns Tag prefix string (empty string for the root module).
+ * @param pathApi   Path implementation (injectable to test Windows paths).
+ * @returns Tag prefix with `/` separators (empty for the root module).
  */
-export function deriveTagPrefix(goModPath: string, repoRoot: string): string {
-  return path.relative(repoRoot, path.dirname(goModPath));
+export function deriveTagPrefix(
+  goModPath: string,
+  repoRoot: string,
+  pathApi: Pick<typeof path, 'relative' | 'dirname' | 'sep'> = path,
+): string {
+  return pathApi
+    .relative(repoRoot, pathApi.dirname(goModPath))
+    .split(pathApi.sep)
+    .join('/');
 }
 
 /**

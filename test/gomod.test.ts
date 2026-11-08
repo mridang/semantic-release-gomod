@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import path, { join } from 'node:path';
 import {
   createAndPushTag,
   deriveTagPrefix,
@@ -314,6 +314,12 @@ describe('updateGoModRequires', () => {
 describe('deriveTagPrefix', () => {
   it('returns an empty string for the root go.mod', () => {
     expect(deriveTagPrefix(join('/repo', 'go.mod'), '/repo')).toBe('');
+  });
+
+  it('uses forward slashes whatever the platform separator', () => {
+    expect(
+      deriveTagPrefix('C:\\repo\\assert\\cert\\go.mod', 'C:\\repo', path.win32),
+    ).toBe('assert/cert');
   });
 
   it('returns the relative directory for submodules', () => {
