@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
+import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import plugin, { prepare, publish, verifyConditions } from '../src/index.js';
@@ -72,14 +73,44 @@ describe('verifyConditions', () => {
     );
   });
 
-  it('looks in the process working directory when the context has none', async () => {
-    const { verify } = stepContext('ignored');
-    await expect(
-      verifyConditions({}, { ...verify, cwd: undefined }, mockExec()),
-    ).rejects.toMatchObject({
-      code: 'EMISSINGGOMOD',
-      details: expect.stringContaining(process.cwd()),
+  it('runs the real git when no executor is injected', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      await expect(
+        verifyConditions({}, stepContext(dir).verify),
+      ).resolves.toBeUndefined();
     });
+  });
+});
+
+describe('steps without a cwd in the context', () => {
+  // The repository this suite runs in has no go.mod at its root.
+  const noCwd = stepContext('ignored');
+
+  it.each([
+    [
+      'verifyConditions',
+      () =>
+        verifyConditions({}, { ...noCwd.verify, cwd: undefined }, mockExec()),
+    ],
+    [
+      'prepare',
+      () => prepare({}, { ...noCwd.prepare, cwd: undefined }, mockExec()),
+    ],
+  ])('%s looks for go.mod in the process directory', async (_step, run) => {
+    await expect(run()).rejects.toThrow(
+      expect.objectContaining({
+        message: expect.stringMatching(/go\.mod/),
+      }),
+    );
+  });
+
+  it('publish tags in the process directory', async () => {
+    const exec = mockExec();
+    await publish({}, { ...noCwd.publish, cwd: undefined }, exec);
+    expect(exec).toHaveBeenCalledWith(
+      'git tag "v1.2.3"',
+      expect.objectContaining({ cwd: process.cwd() }),
+    );
   });
 });
 
@@ -99,6 +130,14 @@ describe('prepare', () => {
       expect(await readFile(join(dir, 'sub/go.mod'), 'utf8')).toContain(
         `${ROOT} v2.0.0`,
       );
+    });
+  });
+
+  it('uses the real executor when none is injected and nothing needs running', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      await expect(
+        prepare({ skipGoModTidy: true }, stepContext(dir).prepare),
+      ).resolves.toBeUndefined();
     });
   });
 
@@ -178,6 +217,29 @@ describe('prepare', () => {
 });
 
 describe('publish', () => {
+  it('runs the real git when no executor is injected', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      const git = (...args: readonly string[]): string =>
+        execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+      git('init', '-q');
+      git(
+        '-c',
+        'user.name=test',
+        '-c',
+        'user.email=test@example.com',
+        'commit',
+        '-q',
+        '--allow-empty',
+        '-m',
+        'init',
+      );
+      await publish({ pushTags: false }, stepContext(dir).publish);
+      expect(git('tag', '--list').trim()).toBe('v1.2.3');
+    });
+  });
+});
+
+describe('publish with a mocked executor', () => {
   const files = {
     'go.mod': goMod(ROOT),
     'pkg/foo/go.mod': goMod(`${ROOT}/pkg/foo`),

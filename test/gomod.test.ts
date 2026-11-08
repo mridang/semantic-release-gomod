@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { readFile } from 'node:fs/promises';
+import { readFile, symlink } from 'node:fs/promises';
 import path, { join } from 'node:path';
 import {
   createAndPushTag,
@@ -148,6 +148,27 @@ describe('discoverSubmoduleGoMods', () => {
     await withTmp({ 'sub/go.mod/keep': '' }, async (dir) => {
       expect(discoverSubmoduleGoMods(dir, ['sub/go.mod'])).toEqual([]);
     });
+  });
+
+  it('ignores a symlink named go.mod, which is not a regular file', async () => {
+    await withTmp(
+      { 'real/go.mod': goMod('github.com/example/repo/real'), 'sub/keep': '' },
+      async (dir) => {
+        await symlink(join(dir, 'real/go.mod'), join(dir, 'sub/go.mod'));
+        expect(discoverSubmoduleGoMods(dir)).toEqual([
+          join(dir, 'real/go.mod'),
+        ]);
+      },
+    );
+  });
+
+  it('matches nothing for a pattern that ends in **', async () => {
+    await withTmp(
+      { 'sub/go.mod': goMod('github.com/example/repo/sub') },
+      async (dir) => {
+        expect(discoverSubmoduleGoMods(dir, ['sub/**'])).toEqual([]);
+      },
+    );
   });
 
   it('returns nothing for a root that cannot be read', () => {

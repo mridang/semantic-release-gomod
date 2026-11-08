@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { VerifyConditionsContext } from 'semantic-release';
-import { defaultExec, type ExecFn } from './exec.js';
+import type { ExecFn } from './exec.js';
 
 /**
  * The part of the semantic-release context logger that tagging uses.
@@ -266,7 +266,7 @@ export function createAndPushTag(
   tag: string,
   push: boolean,
   logger: Logger,
-  exec: ExecFn = defaultExec,
+  exec: ExecFn,
 ): void {
   if (tagExists(repoRoot, tag, exec)) {
     logger.log('Tag %s already exists, skipping', tag);
