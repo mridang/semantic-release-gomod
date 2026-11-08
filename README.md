@@ -113,12 +113,15 @@ All options are case-sensitive and lowercased in the JSON configuration.
 - **`skipGoModTidy` (boolean, optional):**
   Skip running `go mod tidy` in each submodule directory after pinning the
   require version. Useful when Go is not available in the CI environment or
-  for debugging. Default: `false`. Must be a boolean.
+  for debugging. Default: `false`. A boolean; the strings `"true"` and `"false"` (any
+  case) and the numbers `1` and `0` are accepted too, anything else is
+  rejected with `EINVALIDSKIPGOMODTIDY`.
 
 - **`pushTags` (boolean, optional):**
   Push the created submodule tags to the remote origin after creating them
-  locally. Set to `false` to create tags locally only. Default: `true`. Must be a boolean; a string such as `"false"` is rejected
-  with `EINVALIDPUSHTAGS`.
+  locally. Set to `false` to create tags locally only. Default: `true`. A boolean; the strings `"true"` and `"false"` (any case)
+  and the numbers `1` and `0` are accepted too, anything else is rejected
+  with `EINVALIDPUSHTAGS`. Tags are pushed to the remote named `origin`.
 
 ## Tag Naming
 

@@ -39,10 +39,12 @@ describe('resolveConfig', () => {
   );
 
   it.each([
-    ['skipGoModTidy', 'EINVALIDSKIPGOMODTIDY', 'true'],
-    ['skipGoModTidy', 'EINVALIDSKIPGOMODTIDY', 1],
-    ['pushTags', 'EINVALIDPUSHTAGS', 'false'],
-    ['pushTags', 'EINVALIDPUSHTAGS', 0],
+    ['skipGoModTidy', 'EINVALIDSKIPGOMODTIDY', 'yes'],
+    ['skipGoModTidy', 'EINVALIDSKIPGOMODTIDY', 2],
+    ['skipGoModTidy', 'EINVALIDSKIPGOMODTIDY', {}],
+    ['pushTags', 'EINVALIDPUSHTAGS', ''],
+    ['pushTags', 'EINVALIDPUSHTAGS', []],
+    ['pushTags', 'EINVALIDPUSHTAGS', 'no'],
   ])('rejects %s set to %j with %s', (option, code, value) => {
     expect(() => resolveConfig(rawConfig({ [option]: value }))).toThrow(
       expect.objectContaining({
@@ -50,6 +52,22 @@ describe('resolveConfig', () => {
         message: `Option '${option}' must be true or false.`,
       }),
     );
+  });
+
+  it.each([
+    ['true', true],
+    ['false', false],
+    ['TRUE', true],
+    [' False ', false],
+    [1, true],
+    [0, false],
+  ])('accepts the harmless spelling %j of a flag', (value, expected) => {
+    expect(resolveConfig(rawConfig({ pushTags: value })).pushTags).toBe(
+      expected,
+    );
+    expect(
+      resolveConfig(rawConfig({ skipGoModTidy: value })).skipGoModTidy,
+    ).toBe(expected);
   });
 
   it.each([

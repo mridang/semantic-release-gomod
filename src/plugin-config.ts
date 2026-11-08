@@ -70,27 +70,52 @@ export function resolveConfig(config: GomodPluginConfig): ResolvedConfig {
   const modules: unknown = config.modules;
   return {
     modules: resolveModules(modules),
-    skipGoModTidy: resolveFlag('skipGoModTidy', config.skipGoModTidy, false),
-    pushTags: resolveFlag('pushTags', config.pushTags, true),
+    skipGoModTidy: resolveFlag(
+      'skipGoModTidy',
+      'EINVALIDSKIPGOMODTIDY',
+      config.skipGoModTidy,
+      false,
+    ),
+    pushTags: resolveFlag(
+      'pushTags',
+      'EINVALIDPUSHTAGS',
+      config.pushTags,
+      true,
+    ),
   };
 }
 
 /**
- * Check a boolean option. `undefined` and `null` take the default.
+ * Check a boolean option. `undefined` and `null` take the default. The
+ * spellings a config file or an environment variable easily produces are
+ * accepted too: the strings `"true"` and `"false"` in any case, and `1` and
+ * `0`.
  *
  * @param name The option name, for the error.
+ * @param code The error code to throw for a value that is none of these.
  * @param value The raw option value.
  * @param fallback The value when the option is not set.
  * @returns The option as a boolean.
- * @throws SemanticReleaseError `EINVALID<NAME>` when it is not a boolean, for
- * example the string `"false"`, which would otherwise be silently ignored.
+ * @throws SemanticReleaseError with `code` for any other value.
  */
-function resolveFlag(name: string, value: unknown, fallback: boolean): boolean {
+function resolveFlag(
+  name: string,
+  code: string,
+  value: unknown,
+  fallback: boolean,
+): boolean {
   if (value === undefined || value === null) return fallback;
   if (typeof value === 'boolean') return value;
+  if (value === 1) return true;
+  if (value === 0) return false;
+  if (typeof value === 'string') {
+    const word = value.trim().toLowerCase();
+    if (word === 'true') return true;
+    if (word === 'false') return false;
+  }
   throw new SemanticReleaseError(
     `Option '${name}' must be true or false.`,
-    `EINVALID${name.toUpperCase()}`,
+    code,
     `Use a boolean such as \`${name}: ${String(!fallback)}\`, not the ${typeof value} ${JSON.stringify(value)}.`,
   );
 }
