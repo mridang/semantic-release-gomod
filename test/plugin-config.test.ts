@@ -38,6 +38,20 @@ describe('resolveConfig', () => {
     },
   );
 
+  it.each([
+    ['skipGoModTidy', 'EINVALIDSKIPGOMODTIDY', 'true'],
+    ['skipGoModTidy', 'EINVALIDSKIPGOMODTIDY', 1],
+    ['pushTags', 'EINVALIDPUSHTAGS', 'false'],
+    ['pushTags', 'EINVALIDPUSHTAGS', 0],
+  ])('rejects %s set to %j with %s', (option, code, value) => {
+    expect(() => resolveConfig(rawConfig({ [option]: value }))).toThrow(
+      expect.objectContaining({
+        code,
+        message: `Option '${option}' must be true or false.`,
+      }),
+    );
+  });
+
   it('keeps false as a real value for the boolean options', () => {
     expect(resolveConfig({ pushTags: false, skipGoModTidy: false })).toEqual({
       modules: undefined,

@@ -63,15 +63,36 @@ export interface ResolvedConfig {
  * @param config The plugin configuration.
  * @returns The resolved options.
  * @throws SemanticReleaseError `EINVALIDMODULES` when `modules` is neither a
- * string nor an array of strings.
+ * string nor an array of strings, or `EINVALIDSKIPGOMODTIDY` and
+ * `EINVALIDPUSHTAGS` when those options are not booleans.
  */
 export function resolveConfig(config: GomodPluginConfig): ResolvedConfig {
   const modules: unknown = config.modules;
   return {
     modules: resolveModules(modules),
-    skipGoModTidy: config.skipGoModTidy === true,
-    pushTags: config.pushTags !== false,
+    skipGoModTidy: resolveFlag('skipGoModTidy', config.skipGoModTidy, false),
+    pushTags: resolveFlag('pushTags', config.pushTags, true),
   };
+}
+
+/**
+ * Check a boolean option. `undefined` and `null` take the default.
+ *
+ * @param name The option name, for the error.
+ * @param value The raw option value.
+ * @param fallback The value when the option is not set.
+ * @returns The option as a boolean.
+ * @throws SemanticReleaseError `EINVALID<NAME>` when it is not a boolean, for
+ * example the string `"false"`, which would otherwise be silently ignored.
+ */
+function resolveFlag(name: string, value: unknown, fallback: boolean): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === 'boolean') return value;
+  throw new SemanticReleaseError(
+    `Option '${name}' must be true or false.`,
+    `EINVALID${name.toUpperCase()}`,
+    `Use a boolean such as \`${name}: ${String(!fallback)}\`, not the ${typeof value} ${JSON.stringify(value)}.`,
+  );
 }
 
 /**
