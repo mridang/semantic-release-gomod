@@ -196,6 +196,56 @@ describe('updateGoModRequires', () => {
     expect(await update([])).toBe(goMod('github.com/example/sub'));
   });
 
+  it.each([
+    ['a longer module name', 'github.com/example/repository v1.0.0'],
+    ['a hyphenated sibling', 'github.com/example/repo-x v1.2.0'],
+    ['a dotted sibling', 'github.com/example/repo.v2 v1.2.0'],
+  ])(
+    'does not touch %s that merely starts with the root path',
+    async (_name, line) => {
+      expect(await update([line])).toContain(line);
+    },
+  );
+
+  it('pins a single-line require', async () => {
+    await withTmp(
+      {
+        'go.mod':
+          'module x\n\nrequire github.com/example/repo v1.0.0 // indirect\n',
+      },
+      async (dir) => {
+        updateGoModRequires(
+          join(dir, 'go.mod'),
+          'github.com/example/repo',
+          '2.0.0',
+        );
+        expect(await readFile(join(dir, 'go.mod'), 'utf8')).toBe(
+          'module x\n\nrequire github.com/example/repo v2.0.0 // indirect\n',
+        );
+      },
+    );
+  });
+
+  it.each([
+    ['replace', 'replace github.com/example/repo v1.0.0 => ../repo'],
+    ['exclude', 'exclude github.com/example/repo v1.0.0'],
+    [
+      'replace block',
+      'replace (\n\tgithub.com/example/repo v1.0.0 => ../repo\n)',
+    ],
+    ['retract', 'retract v1.0.0'],
+  ])('leaves %s directives alone', async (_name, directive) => {
+    const content = `module x\n\n${directive}\n`;
+    await withTmp({ 'go.mod': content }, async (dir) => {
+      updateGoModRequires(
+        join(dir, 'go.mod'),
+        'github.com/example/repo',
+        '2.0.0',
+      );
+      expect(await readFile(join(dir, 'go.mod'), 'utf8')).toBe(content);
+    });
+  });
+
   it('treats regex characters in the module path literally', async () => {
     await withTmp(
       { 'go.mod': goMod('x', ['github.com/aXb/repo v1.0.0']) },

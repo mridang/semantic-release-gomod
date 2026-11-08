@@ -144,9 +144,21 @@ export function updateGoModRequires(
   const content = fs.readFileSync(filePath, 'utf8');
   // Escape slashes and dots in the module path for use in regex
   const escaped = rootModule.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Match: <module_path_starting_with_root> <v-prefixed-version> [optional comment]
-  const pattern = new RegExp(`(${escaped}[^\\s]*)\\s+v[0-9]\\S*`, 'g');
-  const updated = content.replace(pattern, `$1 v${newVersion}`);
+  // The path must be the root module or one of its sub-paths, so `repo` does
+  // not match `repository` or `repo-x`.
+  const requirePath = `${escaped}(?:/\\S*)?`;
+  const version = `[ \\t]+v[0-9]\\S*`;
+  const inBlock = new RegExp(`^([ \\t]*${requirePath})${version}`, 'gm');
+  const single = new RegExp(`^(require[ \\t]+${requirePath})${version}`, 'gm');
+  const pin = `$1 v${newVersion}`;
+  // Only `require` directives are pinned, never replace, exclude or retract.
+  const updated = content
+    .replace(
+      /(^require[ \t]*\(\r?\n)([\s\S]*?)(^[ \t]*\))/gm,
+      (_match, open: string, body: string, close: string) =>
+        `${open}${body.replace(inBlock, pin)}${close}`,
+    )
+    .replace(single, pin);
   if (updated !== content) {
     fs.writeFileSync(filePath, updated, 'utf8');
   }
