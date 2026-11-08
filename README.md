@@ -91,15 +91,37 @@ All options are case-sensitive and lowercased in the JSON configuration.
   `go.mod` files. When omitted, the plugin auto-discovers every `go.mod`
   in the repository except the root-level one.
   Example: `["assert/**/go.mod", "env/**/go.mod"]`.
+  Only literal names and whole-segment `*` (one directory) and `**` (any
+  number of directories) wildcards are supported; `?`, `[...]`, `{a,b}`,
+  partial wildcards such as `svc-*`, and `..` are rejected with
+  `EINVALIDMODULES`. A pattern that matches nothing is reported with a
+  warning. A value that is not set, `null` or `false` means
+  auto-discovery.
+
+  Which `go.mod` files are found: the root-level `go.mod` is never a
+  submodule. Auto-discovery and wildcards do not search `vendor`, `node_modules` or any
+  directory whose name starts with a dot (`.git`, `.go`, `.tools`, a git
+  worktree under `.claude`), and each skipped directory other than `.git` is
+  logged. A go.mod below a dot-directory could never be released, because
+  neither a Go module path nor a git ref may have a component starting with a
+  dot. Name a `go.mod` literally, such as `vendor/x/go.mod`, to include one in
+  a skipped directory. Symlinks, to files or to directories, are never followed, and a match outside the repository is dropped. Go also ignores
+  directories named `testdata` or starting with `_`; this plugin does not,
+  so list the modules explicitly with `modules` if you have fixture modules
+  there.
 
 - **`skipGoModTidy` (boolean, optional):**
   Skip running `go mod tidy` in each submodule directory after pinning the
   require version. Useful when Go is not available in the CI environment or
-  for debugging. Default: `false`.
+  for debugging. Default: `false`. A boolean; the strings `"true"` and `"false"` (any
+  case) and the numbers `1` and `0` are accepted too, anything else is
+  rejected with `EINVALIDSKIPGOMODTIDY`.
 
 - **`pushTags` (boolean, optional):**
   Push the created submodule tags to the remote origin after creating them
-  locally. Set to `false` to create tags locally only. Default: `true`.
+  locally. Set to `false` to create tags locally only. Default: `true`. A boolean; the strings `"true"` and `"false"` (any case)
+  and the numbers `1` and `0` are accepted too, anything else is rejected
+  with `EINVALIDPUSHTAGS`. Tags are pushed to the remote named `origin`.
 
 ## Tag Naming
 
@@ -111,6 +133,24 @@ its `go.mod` directory to the repository root:
 | `./go.mod`                     | `v1.2.3`                     |
 | `./assert/cert/manager/go.mod` | `assert/cert/manager/v1.2.3` |
 | `./env/flux/helm/go.mod`       | `env/flux/helm/v1.2.3`       |
+
+Tag names are checked as early as possible. `verifyConditions` checks every
+module directory with a placeholder version, and `prepare` checks the real
+tags before it rewrites any file, so a directory git cannot use in a tag
+(spaces, `~`, `^`, `:`, a component starting with `.` or ending in `.lock`,
+a leading `-`, and so on) stops the release with `EINVALIDTAG` before the
+release commit and the root tag exist. A tag that already exists at another
+commit than `HEAD` stops it with `ETAGMISMATCH`, because pushing it would
+publish old code under the new version. When `pushTags` is on, `prepare` and
+`publish` also read the tags on `origin` (`git ls-remote --tags origin`), so
+`origin` must exist and be readable, and a tag on `origin` at another commit
+stops the release too. `publish` repeats both checks for all tags before it
+creates or pushes the first one. A tag that already points at `HEAD` is left
+as it is, so a re-run is safe: a local one is not created again, and one that
+is already on `origin` at `HEAD` (for example an annotated tag made elsewhere)
+is neither created nor pushed. Skipped directories and unmatched patterns are
+reported once, by `verifyConditions`. The `modules` option only lists
+modules to include; there is no exclusion syntax.
 
 ## Known Issues
 

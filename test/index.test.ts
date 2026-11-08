@@ -1,632 +1,576 @@
+import { describe, expect, it } from '@jest/globals';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import plugin, { prepare, publish, verifyConditions } from '../src/index.js';
 import {
-  describe,
-  expect,
-  it,
-  jest,
-  beforeEach,
-  afterEach,
-} from '@jest/globals';
-import * as fs from 'fs';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
-import { verifyConditions, prepare, publish } from '../src/index.js';
-import type {
-  VerifyConditionsContext,
-  PrepareContext,
-  PublishContext,
-} from 'semantic-release';
-import type { GomodPluginConfig } from '../src/plugin-config.js';
-import type { ExecFn } from '../src/exec.js';
-import {
-  discoverSubmoduleGoMods,
-  readModulePath,
-  updateGoModRequires,
-  deriveTagPrefix,
-} from '../src/gomod.js';
+  commandsOf,
+  exitedWith,
+  HEAD,
+  mockExec,
+  rawConfig,
+  stepContext,
+} from './utils/context.js';
+import { goMod } from './utils/go-mod.js';
+import { initBare, initRepo } from './utils/repo.js';
+import { withTmp } from './utils/tmpdir.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+/** The at sign, spelled out so no secret scanner mistakes a fixture for a credential. */
+const AT = String.fromCharCode(64);
+const ROOT = 'github.com/example/repo';
 
-const logger = {
-  log: jest.fn(),
-  warn: jest.fn(),
-  error: jest.fn(),
-};
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeTmpDir(suffix: string): string {
-  const dir = path.join(__dirname, `tmp-${suffix}`);
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
-}
-
-function writeGoMod(
-  dir: string,
-  modulePath: string,
-  requires: string[] = [],
-): void {
-  const requireBlock =
-    requires.length > 0
-      ? `\nrequire (\n${requires.map((r) => `\t${r}`).join('\n')}\n)\n`
-      : '';
-  fs.writeFileSync(
-    path.join(dir, 'go.mod'),
-    `module ${modulePath}\n\ngo 1.21\n${requireBlock}`,
-  );
-}
-
-// ---------------------------------------------------------------------------
-// discoverSubmoduleGoMods
-// ---------------------------------------------------------------------------
-
-describe('discoverSubmoduleGoMods()', () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = makeTmpDir('discover');
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('returns empty array when only root go.mod exists', () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const result = discoverSubmoduleGoMods(tmpDir);
-    expect(result).toEqual([]);
-  });
-
-  it('auto-detects submodule go.mod files', () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const subDir = path.join(tmpDir, 'pkg', 'foo');
-    fs.mkdirSync(subDir, { recursive: true });
-    writeGoMod(subDir, 'github.com/example/repo/pkg/foo');
-    const result = discoverSubmoduleGoMods(tmpDir);
-    expect(result).toEqual([path.join(subDir, 'go.mod')]);
-  });
-
-  it('respects glob patterns when provided', () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const assertDir = path.join(tmpDir, 'assert', 'foo');
-    const envDir = path.join(tmpDir, 'env', 'bar');
-    const otherDir = path.join(tmpDir, 'other', 'baz');
-    fs.mkdirSync(assertDir, { recursive: true });
-    fs.mkdirSync(envDir, { recursive: true });
-    fs.mkdirSync(otherDir, { recursive: true });
-    writeGoMod(assertDir, 'github.com/example/repo/assert/foo');
-    writeGoMod(envDir, 'github.com/example/repo/env/bar');
-    writeGoMod(otherDir, 'github.com/example/repo/other/baz');
-
-    const result = discoverSubmoduleGoMods(tmpDir, [
-      'assert/**/go.mod',
-      'env/**/go.mod',
-    ]);
-    expect(result).toContain(path.join(assertDir, 'go.mod'));
-    expect(result).toContain(path.join(envDir, 'go.mod'));
-    expect(result).not.toContain(path.join(otherDir, 'go.mod'));
-  });
-
-  it('skips vendor and node_modules directories', () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const vendorDir = path.join(tmpDir, 'vendor', 'pkg');
-    fs.mkdirSync(vendorDir, { recursive: true });
-    writeGoMod(vendorDir, 'github.com/example/vendored');
-    const result = discoverSubmoduleGoMods(tmpDir);
-    expect(result).toEqual([]);
-  });
-
-  it('supports single-level * wildcard in glob patterns', () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const aDir = path.join(tmpDir, 'pkg', 'a');
-    const bDir = path.join(tmpDir, 'pkg', 'b');
-    fs.mkdirSync(aDir, { recursive: true });
-    fs.mkdirSync(bDir, { recursive: true });
-    writeGoMod(aDir, 'github.com/example/repo/pkg/a');
-    writeGoMod(bDir, 'github.com/example/repo/pkg/b');
-    const result = discoverSubmoduleGoMods(tmpDir, ['pkg/*/go.mod']);
-    expect(result).toContain(path.join(aDir, 'go.mod'));
-    expect(result).toContain(path.join(bDir, 'go.mod'));
+describe('default export', () => {
+  it('exposes the three semantic-release steps', () => {
+    expect(plugin).toEqual({ verifyConditions, prepare, publish });
   });
 });
 
-// ---------------------------------------------------------------------------
-// readModulePath
-// ---------------------------------------------------------------------------
-
-describe('readModulePath()', () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = makeTmpDir('readmodule');
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('extracts the module path from a go.mod file', () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    expect(readModulePath(path.join(tmpDir, 'go.mod'))).toBe(
-      'github.com/example/repo',
-    );
-  });
-
-  it('throws if no module line is present', () => {
-    fs.writeFileSync(path.join(tmpDir, 'go.mod'), 'go 1.21\n');
-    expect(() => readModulePath(path.join(tmpDir, 'go.mod'))).toThrow(
-      /No module declaration/,
-    );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// updateGoModRequires
-// ---------------------------------------------------------------------------
-
-describe('updateGoModRequires()', () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = makeTmpDir('update');
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('replaces the version of a direct require', () => {
-    writeGoMod(tmpDir, 'github.com/example/sub', [
-      'github.com/example/repo v1.0.0',
-    ]);
-    updateGoModRequires(
-      path.join(tmpDir, 'go.mod'),
-      'github.com/example/repo',
-      '2.0.0',
-    );
-    const content = fs.readFileSync(path.join(tmpDir, 'go.mod'), 'utf8');
-    expect(content).toContain('github.com/example/repo v2.0.0');
-    expect(content).not.toContain('v1.0.0');
-  });
-
-  it('preserves // indirect comments', () => {
-    writeGoMod(tmpDir, 'github.com/example/sub', [
-      'github.com/example/repo v1.0.0 // indirect',
-    ]);
-    updateGoModRequires(
-      path.join(tmpDir, 'go.mod'),
-      'github.com/example/repo',
-      '2.0.0',
-    );
-    const content = fs.readFileSync(path.join(tmpDir, 'go.mod'), 'utf8');
-    expect(content).toContain('github.com/example/repo v2.0.0 // indirect');
-  });
-
-  it('updates sub-path requires of the root module', () => {
-    writeGoMod(tmpDir, 'github.com/example/sub', [
-      'github.com/example/repo/pkg/foo v1.0.0',
-    ]);
-    updateGoModRequires(
-      path.join(tmpDir, 'go.mod'),
-      'github.com/example/repo',
-      '2.0.0',
-    );
-    const content = fs.readFileSync(path.join(tmpDir, 'go.mod'), 'utf8');
-    expect(content).toContain('github.com/example/repo/pkg/foo v2.0.0');
-  });
-
-  it('does not modify unrelated requires', () => {
-    writeGoMod(tmpDir, 'github.com/example/sub', [
-      'github.com/other/lib v3.0.0',
-    ]);
-    updateGoModRequires(
-      path.join(tmpDir, 'go.mod'),
-      'github.com/example/repo',
-      '2.0.0',
-    );
-    const content = fs.readFileSync(path.join(tmpDir, 'go.mod'), 'utf8');
-    expect(content).toContain('github.com/other/lib v3.0.0');
-  });
-
-  it('is a no-op when there is nothing to update', () => {
-    writeGoMod(tmpDir, 'github.com/example/sub');
-    const before = fs.readFileSync(path.join(tmpDir, 'go.mod'), 'utf8');
-    updateGoModRequires(
-      path.join(tmpDir, 'go.mod'),
-      'github.com/example/repo',
-      '2.0.0',
-    );
-    const after = fs.readFileSync(path.join(tmpDir, 'go.mod'), 'utf8');
-    expect(after).toBe(before);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// deriveTagPrefix
-// ---------------------------------------------------------------------------
-
-describe('deriveTagPrefix()', () => {
-  it('returns empty string for the root go.mod', () => {
-    const root = '/repo';
-    expect(deriveTagPrefix(path.join(root, 'go.mod'), root)).toBe('');
-  });
-
-  it('returns relative directory path for submodules', () => {
-    const root = '/repo';
-    expect(
-      deriveTagPrefix(
-        path.join(root, 'assert', 'cert', 'manager', 'go.mod'),
-        root,
-      ),
-    ).toBe('assert/cert/manager');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// verifyConditions()
-// ---------------------------------------------------------------------------
-
-describe('verifyConditions()', () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = makeTmpDir('verify');
-    jest.clearAllMocks();
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  const baseCtx = () =>
-    ({
-      logger,
-      cwd: tmpDir,
-    }) as unknown as VerifyConditionsContext;
-
+describe('verifyConditions', () => {
   it('passes when go.mod exists and git is available', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const mockExec = jest.fn();
-    await expect(
-      verifyConditions(
-        {} as GomodPluginConfig,
-        baseCtx(),
-        mockExec as unknown as ExecFn,
-      ),
-    ).resolves.toBeUndefined();
-    expect(mockExec).toHaveBeenCalledWith('git --version', { stdio: 'pipe' });
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      const exec = mockExec();
+      await expect(
+        verifyConditions({}, stepContext(dir).verify, exec),
+      ).resolves.toBeUndefined();
+      expect(exec).toHaveBeenCalledWith('git', ['--version'], {
+        cwd: dir,
+      });
+    });
   });
 
   it('throws EMISSINGGOMOD when go.mod is absent', async () => {
-    await expect(
-      verifyConditions({} as GomodPluginConfig, baseCtx()),
-    ).rejects.toThrow(/go.mod not found/);
+    await withTmp({}, async (dir) => {
+      await expect(
+        verifyConditions({}, stepContext(dir).verify, mockExec()),
+      ).rejects.toMatchObject({
+        code: 'EMISSINGGOMOD',
+        message: 'go.mod not found.',
+        details: expect.stringContaining(dir),
+      });
+    });
   });
 
   it('throws ENOGIT when git is not available', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const mockExec = jest.fn().mockImplementationOnce(() => {
-      throw new Error('git not found');
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      const exec = mockExec(() => {
+        throw new Error('git not found');
+      });
+      await expect(
+        verifyConditions({}, stepContext(dir).verify, exec),
+      ).rejects.toMatchObject({
+        code: 'ENOGIT',
+        message: 'git is not available.',
+      });
     });
-    await expect(
-      verifyConditions(
-        {} as GomodPluginConfig,
-        baseCtx(),
-        mockExec as unknown as ExecFn,
-      ),
-    ).rejects.toThrow(/git is not available/);
   });
 
-  it('logs a warning (not an error) when no submodules exist', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const mockExec = jest.fn();
-    await verifyConditions(
-      {} as GomodPluginConfig,
-      baseCtx(),
-      mockExec as unknown as ExecFn,
-    );
-    expect(logger.log).toHaveBeenCalledWith(
-      expect.stringContaining('single-module mode'),
+  it('logs that it is in single-module mode when no submodules exist', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      const { verify, lines } = stepContext(dir);
+      await verifyConditions({}, verify, mockExec());
+      expect(lines).toContain(
+        'No submodule go.mod files found — operating in single-module mode.',
+      );
+    });
+  });
+
+  it('logs the submodule count when submodules are found', async () => {
+    await withTmp(
+      { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
+      async (dir) => {
+        const { verify, lines } = stepContext(dir);
+        await verifyConditions({}, verify, mockExec());
+        expect(lines).toContain('Found %d submodule(s). 1');
+      },
     );
   });
 
-  it('logs submodule count when submodules are found', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const subDir = path.join(tmpDir, 'sub');
-    fs.mkdirSync(subDir, { recursive: true });
-    writeGoMod(subDir, 'github.com/example/repo/sub');
-    const mockExec = jest.fn();
-    await verifyConditions(
-      {} as GomodPluginConfig,
-      baseCtx(),
-      mockExec as unknown as ExecFn,
-    );
-    expect(logger.log).toHaveBeenCalledWith('Found %d submodule(s).', 1);
+  it('fails with EINVALIDMODULES for a modules option of the wrong type', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      await expect(
+        verifyConditions(
+          rawConfig({ modules: 5 }),
+          stepContext(dir).verify,
+          mockExec(),
+        ),
+      ).rejects.toMatchObject({ code: 'EINVALIDMODULES' });
+    });
+  });
+
+  it('runs the real git when no executor is injected', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      await expect(
+        verifyConditions({}, stepContext(dir).verify),
+      ).resolves.toBeUndefined();
+    });
   });
 });
 
-// ---------------------------------------------------------------------------
-// prepare()
-// ---------------------------------------------------------------------------
+describe('a directory name git cannot tag', () => {
+  const files = {
+    'go.mod': goMod(ROOT),
+    'bad dir/go.mod': goMod(`${ROOT}/bad`),
+  };
+  const refuse = (cmd: string): void => {
+    if (cmd.includes('bad dir')) throw exitedWith(1);
+  };
 
-describe('prepare()', () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = makeTmpDir('prepare');
-    jest.clearAllMocks();
+  it('stops verifyConditions, before any release commit exists', async () => {
+    await withTmp(files, async (dir) => {
+      await expect(
+        verifyConditions({}, stepContext(dir).verify, mockExec(refuse)),
+      ).rejects.toMatchObject({ code: 'EINVALIDTAG' });
+    });
   });
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+  it('stops prepare before any go.mod is rewritten or tidied', async () => {
+    await withTmp(
+      { ...files, 'ok/go.mod': goMod(`${ROOT}/ok`, [`${ROOT} v1.0.0`]) },
+      async (dir) => {
+        const exec = mockExec(refuse);
+        await expect(
+          prepare({}, stepContext(dir, '2.0.0').prepare, exec),
+        ).rejects.toMatchObject({ code: 'EINVALIDTAG' });
+        expect(await readFile(join(dir, 'ok/go.mod'), 'utf8')).toContain(
+          `${ROOT} v1.0.0`,
+        );
+        expect(commandsOf(exec).some((cmd) => cmd.startsWith('go '))).toBe(
+          false,
+        );
+      },
+    );
   });
 
-  function makeCtx(version: string): PrepareContext {
-    return {
-      logger,
-      cwd: tmpDir,
-      nextRelease: { version },
-    } as unknown as PrepareContext;
-  }
+  it('checks the names with a placeholder version in verifyConditions', async () => {
+    await withTmp(files, async (dir) => {
+      const exec = mockExec();
+      await verifyConditions({}, stepContext(dir).verify, exec);
+      expect(commandsOf(exec)).toEqual(
+        expect.arrayContaining([
+          'git check-ref-format refs/tags/v0.0.0',
+          'git check-ref-format refs/tags/bad dir/v0.0.0',
+        ]),
+      );
+    });
+  });
+
+  it('stops prepare when a tag exists at another commit', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      const exec = mockExec(() => undefined, { 'v2.0.0': 'f'.repeat(40) });
+      await expect(
+        prepare({}, stepContext(dir, '2.0.0').prepare, exec),
+      ).rejects.toMatchObject({ code: 'ETAGMISMATCH' });
+    });
+  });
+});
+
+describe('skipped directories and empty patterns', () => {
+  it('are reported once, by verifyConditions, not again by prepare and publish', async () => {
+    await withTmp(
+      {
+        'go.mod': goMod(ROOT),
+        'sub/go.mod': goMod(`${ROOT}/sub`),
+        'vendor/p/go.mod': goMod('x'),
+      },
+      async (dir) => {
+        const config = { skipGoModTidy: true, pushTags: false };
+        const exec = mockExec();
+        const context = stepContext(dir);
+        await verifyConditions(config, context.verify, exec);
+        await prepare(config, context.prepare, exec);
+        await publish(config, context.publish, exec);
+        const skipped = context.lines.filter((l) =>
+          l.startsWith('Not searching'),
+        );
+        expect(skipped).toHaveLength(1);
+        expect(skipped[0]).toContain(join(dir, 'vendor'));
+      },
+    );
+  });
+
+  it('keep an unmatched pattern silent in prepare and publish', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      const config = {
+        modules: 'nowhere/go.mod',
+        skipGoModTidy: true,
+        pushTags: false,
+      };
+      const context = stepContext(dir);
+      await prepare(config, context.prepare, mockExec());
+      await publish(config, context.publish, mockExec());
+      expect(context.lines.some((l) => l.startsWith('Pattern'))).toBe(false);
+    });
+  });
+});
+
+describe('steps without a cwd in the context', () => {
+  // The repository this suite runs in has no go.mod at its root.
+  const noCwd = stepContext('ignored');
+
+  it.each([
+    [
+      'verifyConditions',
+      () =>
+        verifyConditions({}, { ...noCwd.verify, cwd: undefined }, mockExec()),
+    ],
+    [
+      'prepare',
+      () => prepare({}, { ...noCwd.prepare, cwd: undefined }, mockExec()),
+    ],
+  ])('%s looks for go.mod in the process directory', async (_step, run) => {
+    await expect(run()).rejects.toThrow(
+      expect.objectContaining({
+        message: expect.stringMatching(/go\.mod/),
+      }),
+    );
+  });
+
+  it('publish tags in the process directory', async () => {
+    const exec = mockExec();
+    await publish({}, { ...noCwd.publish, cwd: undefined }, exec);
+    expect(exec).toHaveBeenCalledWith(
+      'git',
+      ['tag', '--', 'v1.2.3'],
+      expect.objectContaining({ cwd: process.cwd() }),
+    );
+  });
+});
+
+describe('prepare', () => {
+  const files = {
+    'go.mod': goMod(ROOT),
+    'sub/go.mod': goMod(`${ROOT}/sub`, [`${ROOT} v1.0.0`]),
+  };
 
   it('updates submodule requires to the new version', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const subDir = path.join(tmpDir, 'sub');
-    fs.mkdirSync(subDir, { recursive: true });
-    writeGoMod(subDir, 'github.com/example/repo/sub', [
-      'github.com/example/repo v1.0.0',
-    ]);
-
-    const mockExec = jest.fn();
-    await prepare(
-      { skipGoModTidy: true } as GomodPluginConfig,
-      makeCtx('2.0.0'),
-      mockExec as unknown as ExecFn,
-    );
-
-    const content = fs.readFileSync(path.join(subDir, 'go.mod'), 'utf8');
-    expect(content).toContain('github.com/example/repo v2.0.0');
+    await withTmp(files, async (dir) => {
+      await prepare(
+        { skipGoModTidy: true },
+        stepContext(dir, '2.0.0').prepare,
+        mockExec(),
+      );
+      expect(await readFile(join(dir, 'sub/go.mod'), 'utf8')).toContain(
+        `${ROOT} v2.0.0`,
+      );
+    });
   });
 
-  it('runs go mod tidy by default', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const subDir = path.join(tmpDir, 'sub');
-    fs.mkdirSync(subDir, { recursive: true });
-    writeGoMod(subDir, 'github.com/example/repo/sub', [
-      'github.com/example/repo v1.0.0',
-    ]);
+  it('uses the real executor when none is injected and nothing needs running', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      initRepo(dir);
+      await expect(
+        prepare(
+          { skipGoModTidy: true, pushTags: false },
+          stepContext(dir).prepare,
+        ),
+      ).resolves.toBeUndefined();
+    });
+  });
 
-    const mockExec = jest.fn();
-    await prepare(
-      {} as GomodPluginConfig,
-      makeCtx('2.0.0'),
-      mockExec as unknown as ExecFn,
-    );
-
-    expect(mockExec).toHaveBeenCalledWith('go mod tidy', {
-      cwd: subDir,
-      stdio: 'pipe',
+  it('runs go mod tidy in each submodule by default', async () => {
+    await withTmp(files, async (dir) => {
+      const exec = mockExec();
+      const { prepare: ctx, lines } = stepContext(dir, '2.0.0');
+      await prepare({}, ctx, exec);
+      expect(exec).toHaveBeenCalledWith('go', ['mod', 'tidy'], {
+        cwd: join(dir, 'sub'),
+      });
+      expect(lines).toContain('go mod tidy OK in %s sub');
+      expect(lines).toContain('Prepared %d submodule(s) for v%s. 1 2.0.0');
     });
   });
 
   it('skips go mod tidy when skipGoModTidy is true', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const subDir = path.join(tmpDir, 'sub');
-    fs.mkdirSync(subDir, { recursive: true });
-    writeGoMod(subDir, 'github.com/example/repo/sub', [
-      'github.com/example/repo v1.0.0',
-    ]);
-
-    const mockExec = jest.fn();
-    await prepare(
-      { skipGoModTidy: true } as GomodPluginConfig,
-      makeCtx('2.0.0'),
-      mockExec as unknown as ExecFn,
-    );
-
-    const tidyCalls = mockExec.mock.calls.filter((c) =>
-      String(c[0]).includes('go mod tidy'),
-    );
-    expect(tidyCalls.length).toBe(0);
+    await withTmp(files, async (dir) => {
+      const exec = mockExec();
+      await prepare({ skipGoModTidy: true }, stepContext(dir).prepare, exec);
+      expect(commandsOf(exec).some((cmd) => cmd.startsWith('go '))).toBe(false);
+    });
   });
 
-  it('logs and continues when no submodules exist', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const mockExec = jest.fn();
-    await prepare(
-      { skipGoModTidy: true } as GomodPluginConfig,
-      makeCtx('2.0.0'),
-      mockExec as unknown as ExecFn,
-    );
-    expect(logger.log).toHaveBeenCalledWith(
-      expect.stringContaining('No submodules'),
-    );
+  it('logs and returns when no submodules exist', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      const { prepare: ctx, lines } = stepContext(dir);
+      await prepare({}, ctx, mockExec());
+      expect(lines).toContain(`Root module: %s ${ROOT}`);
+      expect(lines).toContain('No submodules to update.');
+    });
   });
 
-  it('accepts modules as a plain string (normalised to array)', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const subDir = path.join(tmpDir, 'sub');
-    fs.mkdirSync(subDir, { recursive: true });
-    writeGoMod(subDir, 'github.com/example/repo/sub', [
-      'github.com/example/repo v1.0.0',
-    ]);
-
-    const mockExec = jest.fn();
-    await prepare(
-      { modules: 'sub/go.mod', skipGoModTidy: true } as GomodPluginConfig,
-      makeCtx('3.0.0'),
-      mockExec as unknown as ExecFn,
-    );
-
-    const content = fs.readFileSync(path.join(subDir, 'go.mod'), 'utf8');
-    expect(content).toContain('github.com/example/repo v3.0.0');
-  });
-
-  it('accepts modules as an array of strings', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const subDir = path.join(tmpDir, 'sub');
-    fs.mkdirSync(subDir, { recursive: true });
-    writeGoMod(subDir, 'github.com/example/repo/sub', [
-      'github.com/example/repo v1.0.0',
-    ]);
-
-    const mockExec = jest.fn();
-    await prepare(
-      {
-        modules: ['sub/go.mod'],
-        skipGoModTidy: true,
-      } as GomodPluginConfig,
-      makeCtx('4.0.0'),
-      mockExec as unknown as ExecFn,
-    );
-
-    const content = fs.readFileSync(path.join(subDir, 'go.mod'), 'utf8');
-    expect(content).toContain('github.com/example/repo v4.0.0');
+  it.each([
+    ['a plain string', 'sub/go.mod'],
+    ['an array of strings', ['sub/go.mod']],
+  ])('accepts modules as %s', async (_name, modules) => {
+    await withTmp(files, async (dir) => {
+      await prepare(
+        { modules, skipGoModTidy: true },
+        stepContext(dir, '3.0.0').prepare,
+        mockExec(),
+      );
+      expect(await readFile(join(dir, 'sub/go.mod'), 'utf8')).toContain(
+        `${ROOT} v3.0.0`,
+      );
+    });
   });
 
   it('warns and continues when go mod tidy fails', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const subDir = path.join(tmpDir, 'sub');
-    fs.mkdirSync(subDir, { recursive: true });
-    writeGoMod(subDir, 'github.com/example/repo/sub', [
-      'github.com/example/repo v1.0.0',
-    ]);
-
-    const mockExec = jest.fn().mockImplementation((cmd: unknown) => {
-      if (String(cmd).includes('go mod tidy')) {
-        throw new Error('go: module lookup disabled by GONOSUMCHECK');
-      }
+    await withTmp(files, async (dir) => {
+      const exec = mockExec((cmd) => {
+        if (cmd.startsWith('go '))
+          throw new Error('go: module lookup disabled');
+      });
+      const { prepare: ctx, lines } = stepContext(dir, '2.0.0');
+      await expect(prepare({}, ctx, exec)).resolves.toBeUndefined();
+      expect(lines).toContain(
+        'go mod tidy failed in %s: %s sub go: module lookup disabled',
+      );
     });
-    await prepare(
-      {} as GomodPluginConfig,
-      makeCtx('2.0.0'),
-      mockExec as unknown as ExecFn,
+  });
+
+  it('redacts credentials in URLs from the go mod tidy warning', async () => {
+    await withTmp(files, async (dir) => {
+      const exec = mockExec((cmd) => {
+        if (cmd.startsWith('go '))
+          throw new Error(
+            `go: https://user:s3cret${AT}proxy.example.com/x failed`,
+          );
+      });
+      const { prepare: ctx, lines } = stepContext(dir, '2.0.0');
+      await prepare({}, ctx, exec);
+      expect(lines).toContain(
+        `go mod tidy failed in %s: %s sub go: https://***${AT}proxy.example.com/x failed`,
+      );
+      expect(lines.join('\n')).not.toContain('s3cret');
+    });
+  });
+
+  it('fails when the root go.mod has no module declaration', async () => {
+    await withTmp({ 'go.mod': 'go 1.21\n' }, async (dir) => {
+      await expect(
+        prepare({}, stepContext(dir).prepare, mockExec()),
+      ).rejects.toThrow(/No module declaration found/);
+    });
+  });
+});
+
+describe('publish', () => {
+  it('runs the real git when no executor is injected', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      const git = initRepo(dir);
+      await publish({ pushTags: false }, stepContext(dir).publish);
+      expect(git('tag', '--list').trim()).toBe('v1.2.3');
+    });
+  });
+});
+
+describe('publish with hostile directory names', () => {
+  it.each([
+    ['a command substitution', '$(touch${IFS}INJECTED)'],
+    ['backticks', '`touch${IFS}INJECTED`'],
+    ['quotes and a semicolon', 'a";touch${IFS}INJECTED;"b\'c'],
+  ])(
+    'tags a directory named with %s without running a shell',
+    async (_name, name) => {
+      await withTmp(
+        { 'go.mod': goMod(ROOT), [`${name}/go.mod`]: goMod(`${ROOT}/x`) },
+        async (dir) => {
+          const git = initRepo(dir);
+          await publish({ pushTags: false }, stepContext(dir).publish);
+          expect(git('tag', '--list').split('\n')).toContain(`${name}/v1.2.3`);
+          expect(existsSync(join(dir, 'INJECTED'))).toBe(false);
+        },
+      );
+    },
+  );
+});
+
+describe('publish in a real repository', () => {
+  it('refuses a tag left at an older commit and creates no other tag', async () => {
+    await withTmp(
+      { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
+      async (dir) => {
+        const git = initRepo(dir);
+        git('tag', 'sub/v1.2.3');
+        git('commit', '-q', '--allow-empty', '-m', 'two');
+        await expect(
+          publish({ pushTags: false }, stepContext(dir).publish),
+        ).rejects.toMatchObject({ code: 'ETAGMISMATCH' });
+        expect(git('tag', '--list').trim()).toBe('sub/v1.2.3');
+      },
     );
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('go mod tidy failed'),
-      expect.any(String),
-      expect.any(String),
+  });
+
+  it('refuses a tag that exists only on the remote at another commit, before pushing any', async () => {
+    await withTmp({}, async (remote) => {
+      await withTmp(
+        { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
+        async (dir) => {
+          const git = initRepo(dir);
+          initBare(remote);
+          git('remote', 'add', 'origin', remote);
+          git('tag', 'sub/v1.2.3');
+          git('push', '-q', 'origin', 'refs/tags/sub/v1.2.3');
+          git('tag', '-d', 'sub/v1.2.3');
+          git('commit', '-q', '--allow-empty', '-m', 'two');
+          await expect(
+            publish({}, stepContext(dir).publish),
+          ).rejects.toMatchObject({
+            code: 'ETAGMISMATCH',
+          });
+          expect(git('ls-remote', '--tags', 'origin')).not.toContain(
+            'refs/tags/v1.2.3',
+          );
+          expect(git('tag', '--list').trim()).toBe('');
+        },
+      );
+    });
+  });
+
+  it('leaves an annotated tag that is on origin at HEAD alone, and tags the rest', async () => {
+    await withTmp({}, async (remote) => {
+      await withTmp(
+        { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
+        async (dir) => {
+          const git = initRepo(dir);
+          initBare(remote);
+          git('remote', 'add', 'origin', remote);
+          git('tag', '-a', 'sub/v1.2.3', '-m', 'made elsewhere');
+          git('push', '-q', 'origin', 'refs/tags/sub/v1.2.3');
+          git('tag', '-d', 'sub/v1.2.3');
+          await publish({}, stepContext(dir).publish);
+          const remoteTags = git('ls-remote', '--tags', 'origin');
+          expect(remoteTags).toContain('refs/tags/v1.2.3');
+          expect(remoteTags).toContain('refs/tags/sub/v1.2.3^{}');
+          expect(git('tag', '--list').trim()).toBe('v1.2.3');
+        },
+      );
+    });
+  });
+
+  it('treats an annotated tag at HEAD as already created', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      const git = initRepo(dir);
+      git('tag', '-a', 'v1.2.3', '-m', 'release');
+      await expect(
+        publish({ pushTags: false }, stepContext(dir).publish),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  it.each([
+    ['a leading dash', '-dash'],
+    ['a space', 'a b'],
+  ])('creates no tag at all when a directory has %s', async (_name, name) => {
+    await withTmp(
+      { 'go.mod': goMod(ROOT), [`${name}/go.mod`]: goMod(`${ROOT}/x`) },
+      async (dir) => {
+        const git = initRepo(dir);
+        await expect(
+          publish({ pushTags: false }, stepContext(dir).publish),
+        ).rejects.toMatchObject({ code: 'EINVALIDTAG' });
+        expect(git('tag', '--list').trim()).toBe('');
+      },
     );
   });
 });
 
-// ---------------------------------------------------------------------------
-// publish()
-// ---------------------------------------------------------------------------
+describe('publish with a mocked executor', () => {
+  const files = {
+    'go.mod': goMod(ROOT),
+    'pkg/foo/go.mod': goMod(`${ROOT}/pkg/foo`),
+  };
+  const commands = (exec: ReturnType<typeof mockExec>): readonly string[] =>
+    commandsOf(exec);
 
-describe('publish()', () => {
-  let tmpDir: string;
+  const checks = [
+    'git check-ref-format refs/tags/v1.2.3',
+    'git check-ref-format refs/tags/pkg/foo/v1.2.3',
+    'git rev-parse HEAD',
+    'git ls-remote --tags origin',
+    'git rev-parse -q --verify refs/tags/v1.2.3^{commit}',
+    'git rev-parse -q --verify refs/tags/pkg/foo/v1.2.3^{commit}',
+  ];
 
-  beforeEach(() => {
-    tmpDir = makeTmpDir('publish');
-    jest.clearAllMocks();
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  function makeCtx(version: string): PublishContext {
-    return {
-      logger,
-      cwd: tmpDir,
-      nextRelease: { version },
-    } as unknown as PublishContext;
-  }
-
-  it('creates and pushes tags for root + all submodules', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-    const subDir = path.join(tmpDir, 'pkg', 'foo');
-    fs.mkdirSync(subDir, { recursive: true });
-    writeGoMod(subDir, 'github.com/example/repo/pkg/foo');
-
-    const mockExec = jest.fn();
-    await publish(
-      {} as GomodPluginConfig,
-      makeCtx('1.2.3'),
-      mockExec as unknown as ExecFn,
-    );
-
-    const tagCalls = mockExec.mock.calls
-      .filter((c) => String(c[0]).startsWith('git tag'))
-      .map((c) => String(c[0]));
-
-    expect(tagCalls).toContain('git tag "v1.2.3"');
-    expect(tagCalls).toContain('git tag "pkg/foo/v1.2.3"');
-  });
-
-  it('pushes tags when pushTags is true (default)', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-
-    const mockExec = jest.fn();
-    await publish(
-      {} as GomodPluginConfig,
-      makeCtx('1.2.3'),
-      mockExec as unknown as ExecFn,
-    );
-
-    expect(mockExec).toHaveBeenCalledWith(
-      'git push origin "refs/tags/v1.2.3"',
-      expect.objectContaining({ cwd: tmpDir }),
-    );
+  it('validates every tag first, then creates and pushes each', async () => {
+    await withTmp(files, async (dir) => {
+      const exec = mockExec();
+      const { publish: ctx, lines } = stepContext(dir);
+      await publish({}, ctx, exec);
+      expect(commands(exec)).toEqual([
+        ...checks,
+        'git tag -- v1.2.3',
+        'git push origin refs/tags/v1.2.3',
+        'git tag -- pkg/foo/v1.2.3',
+        'git push origin refs/tags/pkg/foo/v1.2.3',
+      ]);
+      expect(lines).toContain('Tagged %d module(s) at v%s. 2 1.2.3');
+    });
   });
 
   it('does not push tags when pushTags is false', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-
-    const mockExec = jest.fn();
-    await publish(
-      { pushTags: false } as GomodPluginConfig,
-      makeCtx('1.2.3'),
-      mockExec as unknown as ExecFn,
-    );
-
-    const pushCalls = mockExec.mock.calls.filter((c) =>
-      String(c[0]).includes('git push origin'),
-    );
-    expect(pushCalls.length).toBe(0);
+    await withTmp(files, async (dir) => {
+      const exec = mockExec();
+      await publish({ pushTags: false }, stepContext(dir).publish, exec);
+      expect(commands(exec).slice(checks.length - 1)).toEqual([
+        'git tag -- v1.2.3',
+        'git tag -- pkg/foo/v1.2.3',
+      ]);
+    });
   });
 
-  it('silently skips tags that already exist and still pushes', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-
-    const mockExec = jest.fn().mockImplementation((cmd: unknown) => {
-      if (String(cmd).startsWith('git tag')) {
-        throw new Error('fatal: tag already exists');
-      }
+  it('skips tags that already exist at HEAD and still pushes', async () => {
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      const exec = mockExec(() => undefined, { 'v1.2.3': HEAD });
+      await expect(
+        publish({}, stepContext(dir).publish, exec),
+      ).resolves.toBeUndefined();
+      expect(commands(exec).slice(-1)).toEqual([
+        'git push origin refs/tags/v1.2.3',
+      ]);
+      expect(commands(exec).some((cmd) => cmd.startsWith('git tag'))).toBe(
+        false,
+      );
     });
+  });
 
-    await expect(
-      publish(
-        {} as GomodPluginConfig,
-        makeCtx('1.2.3'),
-        mockExec as unknown as ExecFn,
-      ),
-    ).resolves.toBeUndefined();
+  it('pushes nothing when any tag exists at another commit', async () => {
+    await withTmp(files, async (dir) => {
+      const exec = mockExec(() => undefined, {
+        'pkg/foo/v1.2.3': 'f'.repeat(40),
+      });
+      await expect(
+        publish({}, stepContext(dir).publish, exec),
+      ).rejects.toMatchObject({ code: 'ETAGMISMATCH' });
+      expect(
+        commands(exec).filter((cmd) => /^git (tag|push)/.test(cmd)),
+      ).toEqual([]);
+    });
+  });
 
-    expect(mockExec).toHaveBeenCalledWith(
-      'git push origin "refs/tags/v1.2.3"',
-      expect.objectContaining({ cwd: tmpDir }),
+  it('pushes nothing when a tag name is invalid', async () => {
+    await withTmp(
+      { 'go.mod': goMod(ROOT), '-dash/go.mod': goMod(`${ROOT}/dash`) },
+      async (dir) => {
+        const exec = mockExec();
+        await expect(
+          publish({}, stepContext(dir).publish, exec),
+        ).rejects.toMatchObject({ code: 'EINVALIDTAG' });
+        expect(
+          commands(exec).filter((cmd) => /^git (tag|push)/.test(cmd)),
+        ).toEqual([]);
+      },
     );
   });
 
   it('rethrows unexpected tag errors', async () => {
-    writeGoMod(tmpDir, 'github.com/example/repo');
-
-    const mockExec = jest.fn().mockImplementation((cmd: unknown) => {
-      if (String(cmd).startsWith('git tag')) {
-        throw new Error('fatal: cannot lock ref');
-      }
+    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+      const exec = mockExec((cmd) => {
+        if (cmd.startsWith('git tag'))
+          throw new Error('fatal: cannot lock ref');
+      });
+      await expect(publish({}, stepContext(dir).publish, exec)).rejects.toThrow(
+        /cannot lock ref/,
+      );
     });
-
-    await expect(
-      publish(
-        {} as GomodPluginConfig,
-        makeCtx('1.2.3'),
-        mockExec as unknown as ExecFn,
-      ),
-    ).rejects.toThrow(/cannot lock ref/);
   });
 });
