@@ -189,10 +189,10 @@ export function updateGoModRequires(
   // The path must be the root module or one of its sub-paths, so `repo` does
   // not match `repository` or `repo-x`.
   const requirePath = `${escaped}(?:/\\S*)?`;
-  const version = `[ \\t]+v[0-9]\\S*`;
+  const version = `([ \\t]+)v[0-9]\\S*`;
   const inBlock = new RegExp(`^([ \\t]*${requirePath})${version}`, 'gm');
   const single = new RegExp(`^(require[ \\t]+${requirePath})${version}`, 'gm');
-  const pin = `$1 v${newVersion}`;
+  const pin = `$1$2v${newVersion}`;
   // Only `require` directives are pinned, never replace, exclude or retract.
   const updated = content
     .replace(

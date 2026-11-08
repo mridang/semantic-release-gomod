@@ -276,6 +276,37 @@ describe('updateGoModRequires', () => {
     },
   );
 
+  it('changes only the version and keeps every other byte of the file', async () => {
+    const before = [
+      '\uFEFF// header comment',
+      'module   github.com/example/sub',
+      '',
+      'go 1.21',
+      'toolchain go1.22.1',
+      'godebug default=go1.21',
+      '',
+      'require (',
+      '\tgithub.com/example/repo\t\tv1.0.0 // indirect',
+      '\tgithub.com/other/lib v3.0.0',
+      '\t// a comment inside the block',
+      ')',
+      '',
+      'replace github.com/other/lib => ../lib',
+      'unknown-directive some value',
+      '',
+    ].join('\r\n');
+    await withTmp({ 'go.mod': before }, async (dir) => {
+      updateGoModRequires(
+        join(dir, 'go.mod'),
+        'github.com/example/repo',
+        '2.0.0',
+      );
+      expect(await readFile(join(dir, 'go.mod'), 'utf8')).toBe(
+        before.replace('repo\t\tv1.0.0', 'repo\t\tv2.0.0'),
+      );
+    });
+  });
+
   it('pins a single-line require', async () => {
     await withTmp(
       {
