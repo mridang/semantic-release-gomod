@@ -1,4 +1,5 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
+import type { ExecFn } from '../src/exec.js';
 import { readFile, symlink } from 'node:fs/promises';
 import path, { join } from 'node:path';
 import {
@@ -9,7 +10,13 @@ import {
   readModulePath,
   updateGoModRequires,
 } from '../src/gomod.js';
-import { commandsOf, HEAD, mockExec, mockLogger } from './utils/context.js';
+import {
+  commandsOf,
+  exitedWith,
+  HEAD,
+  mockExec,
+  mockLogger,
+} from './utils/context.js';
 import { goMod } from './utils/go-mod.js';
 import { withTmp } from './utils/tmpdir.js';
 
@@ -670,7 +677,7 @@ describe('planTags', () => {
 
   it('refuses a name git rejects before it looks at any tag', () => {
     const exec = mockExec((cmd) => {
-      if (cmd.endsWith('refs/tags/bad name/v1.0.0')) throw new Error('invalid');
+      if (cmd.endsWith('refs/tags/bad name/v1.0.0')) throw exitedWith(1);
     });
     expect(() =>
       planTags('/repo', ['v1.0.0', 'bad name/v1.0.0'], exec),
@@ -692,6 +699,42 @@ describe('planTags', () => {
     );
     expect(exec).not.toHaveBeenCalled();
   });
+});
+
+describe('planTags failures that are not git answering no', () => {
+  it.each([
+    ['status 128', exitedWith(128)],
+    [
+      'a missing git',
+      Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }),
+    ],
+    ['a kill', Object.assign(new Error('killed'), { signal: 'SIGKILL' })],
+  ])(
+    'rethrows %s from check-ref-format instead of calling the tag invalid',
+    (_name, failure) => {
+      const exec = mockExec((cmd) => {
+        if (cmd.startsWith('git check-ref-format')) throw failure;
+      });
+      expect(() => planTags('/repo', ['v1.0.0'], exec)).toThrow(failure);
+    },
+  );
+
+  it.each([
+    ['status 128', exitedWith(128)],
+    [
+      'a missing git',
+      Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }),
+    ],
+  ])(
+    'rethrows %s from the tag lookup instead of calling the tag missing',
+    (_name, failure) => {
+      const exec = jest.fn<ExecFn>((file, args) => {
+        if (args.includes('--verify')) throw failure;
+        return file === 'git' && args[0] === 'rev-parse' ? HEAD : '';
+      });
+      expect(() => planTags('/repo', ['v1.0.0'], exec)).toThrow(failure);
+    },
+  );
 });
 
 describe('createAndPushTag', () => {

@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import SemanticReleaseError from '@semantic-release/error';
 import type { VerifyConditionsContext } from 'semantic-release';
 import type { ExecFn } from './exec.js';
+import { statusOf } from './utils/error.js';
 
 /**
  * The part of the semantic-release context logger the helpers use.
@@ -281,6 +282,7 @@ export interface TagPlan {
  * @param tag      Full tag string.
  * @param exec     Command executor (injectable for testing).
  * @returns True when `git check-ref-format` accepts `refs/tags/<tag>`.
+ * @throws Whatever `git` failed with, unless it only answered "invalid" (exit status 1).
  */
 function isValidTagName(repoRoot: string, tag: string, exec: ExecFn): boolean {
   if (tag.startsWith('-')) return false;
@@ -290,8 +292,11 @@ function isValidTagName(repoRoot: string, tag: string, exec: ExecFn): boolean {
       stdio: 'pipe',
     });
     return true;
-  } catch {
-    return false;
+  } catch (err: unknown) {
+    // Exit status 1 is git's "no"; anything else (git missing, killed,
+    // out of buffer, status 128) is a failure that must not look like one.
+    if (statusOf(err) === 1) return false;
+    throw err;
   }
 }
 
@@ -303,6 +308,7 @@ function isValidTagName(repoRoot: string, tag: string, exec: ExecFn): boolean {
  * @param tag      Full tag string.
  * @param exec     Command executor (injectable for testing).
  * @returns The commit hash, or undefined when the tag does not exist.
+ * @throws Whatever `git` failed with, unless it only answered "missing" (exit status 1).
  */
 function tagCommit(
   repoRoot: string,
@@ -315,8 +321,9 @@ function tagCommit(
       ['rev-parse', '-q', '--verify', `refs/tags/${tag}^{commit}`],
       { cwd: repoRoot, stdio: 'pipe' },
     ).trim();
-  } catch {
-    return undefined;
+  } catch (err: unknown) {
+    if (statusOf(err) === 1) return undefined;
+    throw err;
   }
 }
 

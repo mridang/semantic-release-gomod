@@ -21,6 +21,18 @@ export function mockLogger(): {
 }
 
 /**
+ * The error a program throws when it exits with a status.
+ *
+ * @param status The exit status; git answers a yes/no question with 1.
+ * @returns An error carrying `status`, like the ones `defaultExec` throws.
+ */
+export function exitedWith(status: number): Error {
+  return Object.assign(new Error(`Command failed with status ${status}`), {
+    status,
+  });
+}
+
+/**
  * The commit `HEAD` points at in repositories simulated by `mockExec`.
  */
 export const HEAD = '0123456789abcdef0123456789abcdef01234567';
@@ -47,7 +59,7 @@ export function mockExec(
       const commit = Object.hasOwn(existingTags, tag)
         ? existingTags[tag]
         : undefined;
-      if (commit === undefined) throw new Error('fatal: no such tag');
+      if (commit === undefined) throw exitedWith(1);
       return commit;
     }
     behaviour(cmd);
