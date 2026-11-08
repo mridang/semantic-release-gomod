@@ -17,3 +17,12 @@ export function initRepo(dir: string): (...args: readonly string[]) => string {
   git('commit', '-q', '--allow-empty', '-m', 'one');
   return git;
 }
+
+/**
+ * Turn a directory into an empty bare repository, to use as a remote.
+ *
+ * @param dir The directory.
+ */
+export function initBare(dir: string): void {
+  execFileSync('git', ['init', '--bare', '-q', dir]);
+}

@@ -12,7 +12,7 @@ import {
   stepContext,
 } from './utils/context.js';
 import { goMod } from './utils/go-mod.js';
-import { initRepo } from './utils/repo.js';
+import { initBare, initRepo } from './utils/repo.js';
 import { withTmp } from './utils/tmpdir.js';
 
 const ROOT = 'github.com/example/repo';
@@ -218,7 +218,10 @@ describe('prepare', () => {
     await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
       initRepo(dir);
       await expect(
-        prepare({ skipGoModTidy: true }, stepContext(dir).prepare),
+        prepare(
+          { skipGoModTidy: true, pushTags: false },
+          stepContext(dir).prepare,
+        ),
       ).resolves.toBeUndefined();
     });
   });
@@ -362,6 +365,32 @@ describe('publish in a real repository', () => {
     );
   });
 
+  it('refuses a tag that exists only on the remote at another commit, before pushing any', async () => {
+    await withTmp({}, async (remote) => {
+      await withTmp(
+        { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
+        async (dir) => {
+          const git = initRepo(dir);
+          initBare(remote);
+          git('remote', 'add', 'origin', remote);
+          git('tag', 'sub/v1.2.3');
+          git('push', '-q', 'origin', 'refs/tags/sub/v1.2.3');
+          git('tag', '-d', 'sub/v1.2.3');
+          git('commit', '-q', '--allow-empty', '-m', 'two');
+          await expect(
+            publish({}, stepContext(dir).publish),
+          ).rejects.toMatchObject({
+            code: 'ETAGMISMATCH',
+          });
+          expect(git('ls-remote', '--tags', 'origin')).not.toContain(
+            'refs/tags/v1.2.3',
+          );
+          expect(git('tag', '--list').trim()).toBe('');
+        },
+      );
+    });
+  });
+
   it('treats an annotated tag at HEAD as already created', async () => {
     await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
       const git = initRepo(dir);
@@ -401,6 +430,7 @@ describe('publish with a mocked executor', () => {
     'git check-ref-format refs/tags/v1.2.3',
     'git check-ref-format refs/tags/pkg/foo/v1.2.3',
     'git rev-parse HEAD',
+    'git ls-remote --tags origin',
     'git rev-parse -q --verify refs/tags/v1.2.3^{commit}',
     'git rev-parse -q --verify refs/tags/pkg/foo/v1.2.3^{commit}',
   ];
@@ -429,7 +459,7 @@ describe('publish with a mocked executor', () => {
     await withTmp(files, async (dir) => {
       const exec = mockExec();
       await publish({ pushTags: false }, stepContext(dir).publish, exec);
-      expect(commands(exec).slice(checks.length)).toEqual([
+      expect(commands(exec).slice(checks.length - 1)).toEqual([
         'git tag -- v1.2.3',
         'git tag -- pkg/foo/v1.2.3',
       ]);

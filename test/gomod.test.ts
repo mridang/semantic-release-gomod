@@ -637,7 +637,7 @@ describe('planTags', () => {
 
   it('marks tags by whether they already exist at HEAD', () => {
     const exec = mockExec(() => undefined, { 'a/v1.0.0': HEAD });
-    expect(planTags('/repo', ['a/v1.0.0', 'b/v1.0.0'], exec)).toEqual([
+    expect(planTags('/repo', ['a/v1.0.0', 'b/v1.0.0'], false, exec)).toEqual([
       { tag: 'a/v1.0.0', exists: true },
       { tag: 'b/v1.0.0', exists: false },
     ]);
@@ -645,7 +645,7 @@ describe('planTags', () => {
 
   it('checks the names, then HEAD, then each tag, and creates nothing', () => {
     const exec = mockExec();
-    planTags('/repo', ['v1.0.0', 'a/v1.0.0'], exec);
+    planTags('/repo', ['v1.0.0', 'a/v1.0.0'], false, exec);
     expect(commandsOf(exec)).toEqual([
       'git check-ref-format refs/tags/v1.0.0',
       'git check-ref-format refs/tags/a/v1.0.0',
@@ -657,7 +657,9 @@ describe('planTags', () => {
 
   it('refuses a tag that exists at another commit than HEAD', () => {
     const exec = mockExec(() => undefined, { 'a/v1.0.0': OTHER });
-    expect(() => planTags('/repo', ['v1.0.0', 'a/v1.0.0'], exec)).toThrow(
+    expect(() =>
+      planTags('/repo', ['v1.0.0', 'a/v1.0.0'], false, exec),
+    ).toThrow(
       expect.objectContaining({
         code: 'ETAGMISMATCH',
         message: expect.stringContaining(`a/v1.0.0 (${OTHER})`),
@@ -670,9 +672,9 @@ describe('planTags', () => {
       'a/v1.0.0': OTHER,
       'b/v1.0.0': OTHER,
     });
-    expect(() => planTags('/repo', ['a/v1.0.0', 'b/v1.0.0'], exec)).toThrow(
-      /a\/v1\.0\.0 .*b\/v1\.0\.0/,
-    );
+    expect(() =>
+      planTags('/repo', ['a/v1.0.0', 'b/v1.0.0'], false, exec),
+    ).toThrow(/a\/v1\.0\.0 .*b\/v1\.0\.0/);
   });
 
   it('refuses a name git rejects before it looks at any tag', () => {
@@ -680,7 +682,7 @@ describe('planTags', () => {
       if (cmd.endsWith('refs/tags/bad name/v1.0.0')) throw exitedWith(1);
     });
     expect(() =>
-      planTags('/repo', ['v1.0.0', 'bad name/v1.0.0'], exec),
+      planTags('/repo', ['v1.0.0', 'bad name/v1.0.0'], false, exec),
     ).toThrow(
       expect.objectContaining({
         code: 'EINVALIDTAG',
@@ -694,10 +696,83 @@ describe('planTags', () => {
 
   it('refuses a tag starting with a dash without asking git', () => {
     const exec = mockExec();
-    expect(() => planTags('/repo', ['-dash/v1.0.0'], exec)).toThrow(
+    expect(() => planTags('/repo', ['-dash/v1.0.0'], false, exec)).toThrow(
       expect.objectContaining({ code: 'EINVALIDTAG' }),
     );
     expect(exec).not.toHaveBeenCalled();
+  });
+});
+
+describe('planTags and the remote', () => {
+  const OTHER = 'fedcba9876543210fedcba9876543210fedcba98';
+
+  it('refuses a tag that exists on the remote at another commit', () => {
+    const exec = mockExec(() => undefined, {}, { 'sub/v1.0.0': OTHER });
+    expect(() =>
+      planTags('/repo', ['v1.0.0', 'sub/v1.0.0'], true, exec),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'ETAGMISMATCH',
+        message: expect.stringContaining(`sub/v1.0.0 on origin (${OTHER})`),
+      }),
+    );
+  });
+
+  it('accepts a remote tag at HEAD and an annotated tag peeled to HEAD', () => {
+    const exec = jest.fn<ExecFn>((file, args) => {
+      const cmd = [file, ...args].join(' ');
+      if (cmd === 'git rev-parse HEAD') return HEAD;
+      if (cmd === 'git ls-remote --tags origin') {
+        return `${OTHER}\trefs/tags/a/v1.0.0\n${HEAD}\trefs/tags/a/v1.0.0^{}\n${HEAD}\trefs/tags/v1.0.0\n`;
+      }
+      if (cmd.includes('--verify')) throw exitedWith(1);
+      return '';
+    });
+    expect(planTags('/repo', ['v1.0.0', 'a/v1.0.0'], true, exec)).toEqual([
+      { tag: 'v1.0.0', exists: false },
+      { tag: 'a/v1.0.0', exists: false },
+    ]);
+  });
+
+  it('refuses an annotated remote tag whose peeled commit is not HEAD', () => {
+    const exec = jest.fn<ExecFn>((file, args) => {
+      const cmd = [file, ...args].join(' ');
+      if (cmd === 'git rev-parse HEAD') return HEAD;
+      if (cmd === 'git ls-remote --tags origin') {
+        return `${HEAD}\trefs/tags/a/v1.0.0\n${OTHER}\trefs/tags/a/v1.0.0^{}\n`;
+      }
+      if (cmd.includes('--verify')) throw exitedWith(1);
+      return '';
+    });
+    expect(() => planTags('/repo', ['a/v1.0.0'], true, exec)).toThrow(
+      expect.objectContaining({ code: 'ETAGMISMATCH' }),
+    );
+  });
+
+  it('does not contact the remote when the tags are not pushed', () => {
+    const exec = mockExec();
+    planTags('/repo', ['v1.0.0'], false, exec);
+    expect(commandsOf(exec).some((cmd) => cmd.includes('ls-remote'))).toBe(
+      false,
+    );
+  });
+
+  it('asks the remote once, after the local checks', () => {
+    const exec = mockExec();
+    planTags('/repo', ['v1.0.0'], true, exec);
+    expect(commandsOf(exec).filter((cmd) => cmd.includes('ls-remote'))).toEqual(
+      ['git ls-remote --tags origin'],
+    );
+  });
+
+  it('rethrows a failing ls-remote', () => {
+    const exec = jest.fn<ExecFn>((file, args) => {
+      if (args.includes('ls-remote')) throw exitedWith(128);
+      return file === 'git' && args[0] === 'rev-parse' ? HEAD : '';
+    });
+    expect(() => planTags('/repo', ['v1.0.0'], true, exec)).toThrow(
+      expect.objectContaining({ status: 128 }),
+    );
   });
 });
 
@@ -715,7 +790,7 @@ describe('planTags failures that are not git answering no', () => {
       const exec = mockExec((cmd) => {
         if (cmd.startsWith('git check-ref-format')) throw failure;
       });
-      expect(() => planTags('/repo', ['v1.0.0'], exec)).toThrow(failure);
+      expect(() => planTags('/repo', ['v1.0.0'], false, exec)).toThrow(failure);
     },
   );
 
@@ -732,7 +807,7 @@ describe('planTags failures that are not git answering no', () => {
         if (args.includes('--verify')) throw failure;
         return file === 'git' && args[0] === 'rev-parse' ? HEAD : '';
       });
-      expect(() => planTags('/repo', ['v1.0.0'], exec)).toThrow(failure);
+      expect(() => planTags('/repo', ['v1.0.0'], false, exec)).toThrow(failure);
     },
   );
 });

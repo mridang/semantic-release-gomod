@@ -44,16 +44,23 @@ export const HEAD = '0123456789abcdef0123456789abcdef01234567';
  *
  * @param behaviour Called with each other command (program and arguments joined by spaces), and may throw to fail it.
  * @param existingTags Tags that already exist, each with the commit it points at.
+ * @param remoteTags Tags on the remote, each with the commit it points at.
  * @returns A mock usable wherever an `ExecFn` is expected.
  */
 export function mockExec(
   behaviour: (cmd: string) => void = () => undefined,
   existingTags: Readonly<Record<string, string>> = {},
+  remoteTags: Readonly<Record<string, string>> = {},
 ): jest.Mock<ExecFn> {
   const lookup = 'git rev-parse -q --verify refs/tags/';
   return jest.fn<ExecFn>((file, args) => {
     const cmd = [file, ...args].join(' ');
     if (cmd === 'git rev-parse HEAD') return HEAD;
+    if (cmd === 'git ls-remote --tags origin') {
+      return Object.entries(remoteTags)
+        .map(([tag, commit]) => `${commit}\trefs/tags/${tag}`)
+        .join('\n');
+    }
     if (cmd.startsWith(lookup)) {
       const tag = cmd.slice(lookup.length).replace(/\^\{commit\}$/, '');
       const commit = Object.hasOwn(existingTags, tag)

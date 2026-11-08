@@ -102,7 +102,7 @@ export async function prepare(
 
   const submodules = discoverSubmoduleGoMods(cwd, config.modules, logger);
   // Stop before any file is rewritten if a tag cannot be created later.
-  planTags(cwd, tagNames(cwd, submodules, version), exec);
+  planTags(cwd, tagNames(cwd, submodules, version), config.pushTags, exec);
   if (submodules.length === 0) {
     logger.log('No submodules to update.');
     return;
@@ -164,7 +164,7 @@ export async function publish(
 
   const tags = tagNames(cwd, submodules, version);
   // Validate every tag before the first one is created or pushed.
-  const plans = planTags(cwd, tags, exec);
+  const plans = planTags(cwd, tags, config.pushTags, exec);
   for (const plan of plans) {
     createAndPushTag(cwd, plan, config.pushTags, logger, exec);
   }

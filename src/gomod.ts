@@ -375,20 +375,48 @@ export function checkTagNames(
 }
 
 /**
+ * The tags that exist on the remote, with the commit each points at.
+ *
+ * @param repoRoot Absolute path to the repository root.
+ * @param exec     Command executor (injectable for testing).
+ * @returns A map from tag name to commit hash; an annotated tag maps to the
+ * commit it peels to.
+ */
+function remoteTagCommits(
+  repoRoot: string,
+  exec: ExecFn,
+): ReadonlyMap<string, string> {
+  const listing = exec('git', ['ls-remote', '--tags', 'origin'], {
+    cwd: repoRoot,
+    stdio: 'pipe',
+  });
+  // The peeled entry (`<tag>^{}`) follows its tag object, so it wins.
+  return new Map(
+    listing.split('\n').flatMap((line) => {
+      const match = /^([0-9a-f]+)\trefs\/tags\/(.+?)(\^\{\})?$/.exec(line);
+      return match?.[1] && match[2] ? [[match[2], match[1]] as const] : [];
+    }),
+  );
+}
+
+/**
  * Check every tag before any of them is created or pushed, so a bad one
  * cannot leave a release half published. A tag name git would refuse, or an
- * existing tag that points at a different commit than `HEAD` (which would
- * publish stale code under the new version), stops the release.
+ * existing tag, local or (when pushing) on the remote, that points at a
+ * different commit than `HEAD` (which would publish stale code under the new
+ * version), stops the release.
  *
  * @param repoRoot Absolute path to the repository root.
  * @param tags     Every full tag the release will create.
+ * @param push     Whether the tags will be pushed, so the remote is checked.
  * @param exec     Command executor (injectable for testing).
- * @returns For each tag, whether it already exists at `HEAD`.
+ * @returns For each tag, whether it already exists locally at `HEAD`.
  * @throws SemanticReleaseError `EINVALIDTAG` or `ETAGMISMATCH`.
  */
 export function planTags(
   repoRoot: string,
   tags: readonly string[],
+  push: boolean,
   exec: ExecFn,
 ): readonly TagPlan[] {
   checkTagNames(repoRoot, tags, exec);
@@ -396,24 +424,26 @@ export function planTags(
     cwd: repoRoot,
     stdio: 'pipe',
   }).trim();
+  const remote = push ? remoteTagCommits(repoRoot, exec) : new Map();
   const plans = tags.map((tag) => ({
     tag,
-    commit: tagCommit(repoRoot, tag, exec),
+    local: tagCommit(repoRoot, tag, exec),
+    remote: remote.get(tag),
   }));
-  const stale = plans.filter(
-    ({ commit }) => commit !== undefined && commit !== head,
-  );
+  const stale = plans.flatMap(({ tag, local, remote: onRemote }) => [
+    ...(local !== undefined && local !== head ? [`${tag} (${local})`] : []),
+    ...(onRemote !== undefined && onRemote !== head
+      ? [`${tag} on origin (${onRemote})`]
+      : []),
+  ]);
   if (stale.length > 0) {
     throw new SemanticReleaseError(
-      `Tag(s) already exist at another commit than HEAD (${head}): ${stale.map(({ tag, commit }) => `${tag} (${commit})`).join(', ')}.`,
+      `Tag(s) already exist at another commit than HEAD (${head}): ${stale.join(', ')}.`,
       'ETAGMISMATCH',
       'Pushing them would publish old code under this version. Delete the stale tag(s) locally (`git tag -d <tag>`) and on the remote if they were pushed, or release a new version.',
     );
   }
-  return plans.map(({ tag, commit }) => ({
-    tag,
-    exists: commit !== undefined,
-  }));
+  return plans.map(({ tag, local }) => ({ tag, exists: local !== undefined }));
 }
 
 /**
