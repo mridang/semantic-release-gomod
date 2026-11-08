@@ -264,6 +264,17 @@ describe('readModulePath', () => {
     });
   });
 
+  it.each([
+    ['a grouped declaration', 'module (\n\t"github.com/example/q"\n)\n'],
+    ['an empty declaration', 'module\n'],
+  ])('throws for %s, which it cannot read', async (_name, content) => {
+    await withTmp({ 'go.mod': content }, async (dir) => {
+      expect(() => readModulePath(join(dir, 'go.mod'))).toThrow(
+        /No module declaration found/,
+      );
+    });
+  });
+
   it('throws if no module line is present', async () => {
     await withTmp({ 'go.mod': 'go 1.21\n' }, async (dir) => {
       expect(() => readModulePath(join(dir, 'go.mod'))).toThrow(

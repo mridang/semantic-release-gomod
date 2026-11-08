@@ -168,7 +168,7 @@ export function readModulePath(goModPath: string): string {
   const declared = content
     .split('\n')
     .map((line) =>
-      /^\uFEFF?module\s+(\S+)/
+      /^\uFEFF?module\s+([^\s(]\S*)/
         .exec(line)?.[1]
         ?.replace(/^(["`])(.*)\1$/, '$2'),
     )
