@@ -13,17 +13,38 @@ describe('isRecord', () => {
   });
 });
 
-describe('stringAt and numberAt', () => {
+describe('stringAt', () => {
   const record = { s: 'x', n: 0, other: null };
 
-  it('read a property of the right type', () => {
+  it('reads a string property', () => {
     expect(stringAt(record, 's')).toBe('x');
+  });
+
+  it('ignores inherited properties', () => {
+    expect(stringAt(Object.create({ s: 'inherited' }), 's')).toBeUndefined();
+  });
+
+  it('gives undefined for a missing property or the wrong type', () => {
+    expect(stringAt(record, 'n')).toBeUndefined();
+    expect(stringAt(record, 'other')).toBeUndefined();
+    expect(stringAt(record, 'missing')).toBeUndefined();
+  });
+});
+
+describe('numberAt', () => {
+  const record = { s: 'x', n: 0, other: null };
+
+  it('reads a number property', () => {
     expect(numberAt(record, 'n')).toBe(0);
   });
 
-  it('give undefined for a missing property or the wrong type', () => {
-    expect(stringAt(record, 'n')).toBeUndefined();
+  it('ignores inherited properties', () => {
+    expect(numberAt(Object.create({ n: 1 }), 'n')).toBeUndefined();
+  });
+
+  it('gives undefined for a missing property or the wrong type', () => {
+    expect(numberAt(record, 's')).toBeUndefined();
     expect(numberAt(record, 'other')).toBeUndefined();
-    expect(stringAt(record, 'missing')).toBeUndefined();
+    expect(numberAt(record, 'missing')).toBeUndefined();
   });
 });
