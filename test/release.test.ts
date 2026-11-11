@@ -1,3 +1,7 @@
+/**
+ * @file Tests how a release plans, checks and publishes its tags.
+ */
+
 import { describe, expect, it, jest } from '@jest/globals';
 import { Release } from '../src/release.js';
 import type { Runner } from '../src/utils/exec.js';

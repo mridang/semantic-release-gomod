@@ -1,3 +1,8 @@
+/**
+ * @file Plans and publishes the tags of a release, refusing any tag that would
+ * point at the wrong commit.
+ */
+
 import SemanticReleaseError from '@semantic-release/error';
 import type { GitRepository, Tag } from './git.js';
 import type { StepLogger } from './plugin-config.js';
@@ -17,9 +22,13 @@ interface PlannedTag {
 /**
  * Run an asynchronous step for each item, one after the other, so that no
  * more than one child process runs at a time.
- * @param items - The items.
- * @param step - The step for one item.
+ * @template T - The type of each item.
+ * @template R - The type each step resolves to.
+ * @param items - The items to visit, in order.
+ * @param step - The asynchronous step to run for one item.
  * @returns What the steps returned, in order.
+ * @example
+ * const doubled = await sequentially([1, 2], async (n) => n * 2); // [2, 4]
  */
 function sequentially<T, R>(
   items: readonly T[],
@@ -42,13 +51,17 @@ export class Release {
   private readonly push: boolean;
 
   /**
+   * Create a release from a planned set of tags.
    * @param planned - The tags, and what is already done for each.
    * @param push - Whether the tags are pushed to `origin`.
+   * @example
+   * const release = await Release.plan(repository, tags, true);
    */
   private constructor(planned: readonly PlannedTag[], push: boolean) {
     this.planned = planned;
     this.push = push;
   }
+  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * Refuse tag names git would reject, so a bad directory name stops the
@@ -57,6 +70,9 @@ export class Release {
    * tag, a later failure leaves a half published release.
    * @param tags - Every tag the release will create.
    * @throws SemanticReleaseError `EINVALIDTAG` listing every refused name.
+   * @rejects SemanticReleaseError `EINVALIDTAG` listing every refused name.
+   * @example
+   * await Release.check([repository.tag('assert/v1.2.3')]);
    */
   static async check(tags: readonly Tag[]): Promise<void> {
     const valid = await sequentially(tags, (tag) => tag.isValid());
@@ -68,17 +84,23 @@ export class Release {
       'A tag is the module directory plus the version, so rename the directory. Git refuses a tag with a space, `~`, `^`, `:`, `?`, `*`, `[`, `\\`, `..` or `@{`, a component that starts with `.` or ends with `.lock`, a trailing `.` or `/`, and a name starting with `-`. The `modules` option only lists modules to include (there is no exclusion syntax), so to leave a directory out, list the other modules explicitly.',
     );
   }
+  /* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
+  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * Plan a release: check the names, then compare every existing tag, local
    * or (when pushing) on the remote, with `HEAD`. A tag at another commit
    * would publish old code under the new version, so it stops the release;
    * a tag at `HEAD` is left as it is, so a re-run is safe.
-   * @param repository - The repository.
+   * @param repository - The git repository holding the tags and `HEAD`.
    * @param tags - Every tag the release will create.
    * @param push - Whether the tags will be pushed, so the remote is read.
    * @returns The release, ready to publish.
    * @throws SemanticReleaseError `EINVALIDTAG` or `ETAGMISMATCH`.
+   * @rejects SemanticReleaseError `EINVALIDTAG` or `ETAGMISMATCH`.
+   * @example
+   * const release = await Release.plan(repository, [repository.tag('v1.2.3')], true);
+   * await release.publish(context.logger);
    */
   static async plan(
     repository: GitRepository,
@@ -121,14 +143,17 @@ export class Release {
       push,
     );
   }
+  /* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * Create each missing tag and, when pushing, push every tag (one push per
    * tag), one after the other. A tag that is already on `origin` at `HEAD`
    * is neither created nor pushed again, because its object (for example an
    * annotated tag made elsewhere) would differ and the push be rejected.
-   * @param logger - Semantic-release logger.
+   * @param logger - Semantic-release logger that reports each tag step.
    * @returns The tags of the release.
+   * @example
+   * const tags = await release.publish(context.logger);
    */
   async publish(logger: Pick<StepLogger, 'log'>): Promise<readonly Tag[]> {
     for (const { tag, exists, onRemote } of this.planned) {

@@ -1,3 +1,8 @@
+/**
+ * @file Reads, defaults and validates the plugin options and the working
+ * directory of each lifecycle step.
+ */
+
 import SemanticReleaseError from '@semantic-release/error';
 import type { Config, VerifyConditionsContext } from 'semantic-release';
 
@@ -68,6 +73,9 @@ export interface ResolvedConfig {
  * @throws SemanticReleaseError `EINVALIDMODULES` when `modules` is neither a
  * string nor an array of strings, or `EINVALIDSKIPGOMODTIDY` and
  * `EINVALIDPUSHTAGS` when those options are not booleans.
+ * @example
+ * const resolved = resolveConfig({ modules: 'assert/**\/go.mod' });
+ * console.log(resolved.pushTags); // true
  */
 export function resolveConfig(config: GomodPluginConfig): ResolvedConfig {
   const modules: unknown = config.modules;
@@ -99,6 +107,8 @@ export function resolveConfig(config: GomodPluginConfig): ResolvedConfig {
  * @param fallback - The value when the option is not set.
  * @returns The option as a boolean.
  * @throws SemanticReleaseError with `code` for any other value.
+ * @example
+ * resolveFlag('pushTags', 'EINVALIDPUSHTAGS', 'false', true); // false
  */
 function resolveFlag(
   name: string,
@@ -127,6 +137,9 @@ function resolveFlag(
  * and `*` or `**` as a whole segment, without leaving the repository.
  * @param pattern - A glob pattern using `/` separators.
  * @returns True when every segment is supported.
+ * @example
+ * isSupportedPattern('assert/**\/go.mod'); // true
+ * isSupportedPattern('svc-*\/go.mod'); // false
  */
 function isSupportedPattern(pattern: string): boolean {
   return pattern
@@ -143,6 +156,8 @@ function isSupportedPattern(pattern: string): boolean {
  * @param patterns - The glob patterns.
  * @returns The same patterns.
  * @throws SemanticReleaseError `EINVALIDMODULES` listing the unsupported ones.
+ * @example
+ * checkPatterns(['assert/**\/go.mod']); // ['assert/**\/go.mod']
  */
 function checkPatterns(patterns: readonly string[]): readonly string[] {
   const unsupported = patterns.filter((p) => !isSupportedPattern(p));
@@ -161,6 +176,8 @@ function checkPatterns(patterns: readonly string[]): readonly string[] {
  * @param modules - The raw option value.
  * @returns The glob patterns, or undefined to auto-discover.
  * @throws SemanticReleaseError `EINVALIDMODULES` for any other type.
+ * @example
+ * resolveModules(['assert/**\/go.mod', 'env/**\/go.mod']);
  */
 function resolveModules(modules: unknown): readonly string[] | undefined {
   // Any falsy value (undefined, null, false, 0, '') means "not configured".
@@ -183,8 +200,11 @@ function resolveModules(modules: unknown): readonly string[] | undefined {
  * The directory a step runs in: the one semantic-release was given, or else
  * the current directory, which is its own default.
  * @param context - A semantic-release step context.
+ * @param context.cwd - The directory semantic-release was given, if any.
  * @returns The working directory.
+ * @example
+ * const directory = cwdOf({ cwd: '/repo' }); // '/repo'
  */
-export function cwdOf(context: { readonly cwd?: string | undefined }): string {
+export function cwdOf(context: { readonly cwd?: string }): string {
   return context.cwd ?? process.cwd();
 }

@@ -1,5 +1,11 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+/**
+ * @file Finds the go.mod files of a repository and pins and tidies them, using
+ * asynchronous file access throughout.
+ */
+
+import type { Dirent } from 'node:fs';
+import { lstat, readdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { StepLogger } from './plugin-config.js';
 import { run as defaultRun, type Runner } from './utils/exec.js';
 
@@ -17,6 +23,9 @@ type Logger = Pick<StepLogger, 'log' | 'warn'>;
  * starting with a dot. A literal path into one of them is still honoured.
  * @param name - A directory name.
  * @returns True when the directory is not searched.
+ * @example
+ * isIgnoredDir('node_modules'); // true
+ * isIgnoredDir('assert'); // false
  */
 function isIgnoredDir(name: string): boolean {
   return name === 'vendor' || name === 'node_modules' || name.startsWith('.');
@@ -33,9 +42,21 @@ interface Found {
 }
 
 /**
+ * One glob pattern and what it found, or null for the unpatterned tree walk.
+ */
+interface Search {
+  /** The glob pattern, or null when the whole tree was walked. */
+  readonly pattern: string | null;
+  /** What the search found. */
+  readonly found: Found;
+}
+
+/**
  * Combine the results of several searches.
  * @param parts - The results to combine.
  * @returns One result with all their files and skipped directories.
+ * @example
+ * merge([{ files: ['a/go.mod'], skipped: [] }]); // { files: ['a/go.mod'], skipped: [] }
  */
 function merge(parts: readonly Found[]): Found {
   return {
@@ -48,10 +69,12 @@ function merge(parts: readonly Found[]): Found {
  * Read a directory, returning an empty array on any I/O error.
  * @param dir - Absolute path of the directory.
  * @returns Its entries, or an empty array when it cannot be read.
+ * @example
+ * const entries = await safeReadDir('/repo/assert');
  */
-function safeReadDir(dir: string): readonly fs.Dirent[] {
+async function safeReadDir(dir: string): Promise<readonly Dirent[]> {
   try {
-    return fs.readdirSync(dir, { withFileTypes: true });
+    return await readdir(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -77,15 +100,21 @@ interface Listing {
  * @param dir - Absolute path of the directory.
  * @returns Names of its regular files, and the absolute paths of the
  * subdirectories to search and of those that are ignored.
+ * @example
+ * const { files, searchable } = await scan('/repo');
  */
-function scan(dir: string): Listing {
-  const entries = safeReadDir(dir);
+async function scan(dir: string): Promise<Listing> {
+  const entries = await safeReadDir(dir);
   const dirs = entries.filter((entry) => entry.isDirectory());
-  const full = (entry: fs.Dirent): string => path.join(dir, entry.name);
+  const full = (entry: Dirent): string => path.join(dir, entry.name);
   return {
-    files: entries.filter((entry) => entry.isFile()).map((e) => e.name),
-    searchable: dirs.filter((e) => !isIgnoredDir(e.name)).map(full),
-    ignored: dirs.filter((e) => isIgnoredDir(e.name)).map(full),
+    files: entries.filter((entry) => entry.isFile()).map((entry) => entry.name),
+    searchable: dirs
+      .filter((entry) => !isIgnoredDir(entry.name))
+      .map((entry) => full(entry)),
+    ignored: dirs
+      .filter((entry) => isIgnoredDir(entry.name))
+      .map((entry) => full(entry)),
   };
 }
 
@@ -104,22 +133,28 @@ function scan(dir: string): Listing {
  * @param globPatterns - Optional array of glob patterns relative to root.
  * @param logger - Where skipped directories and empty patterns are reported.
  * @returns Sorted array of absolute go.mod paths (submodules only).
+ * @example
+ * const files = await discoverSubmoduleGoMods('/repo', ['assert/**\/go.mod'], logger);
  */
-function discoverSubmoduleGoMods(
+async function discoverSubmoduleGoMods(
   root: string,
   globPatterns: readonly string[] | undefined,
   logger: Logger,
-): readonly string[] {
+): Promise<readonly string[]> {
   const rootGoMod = path.join(root, 'go.mod');
   const isSubmodule = (file: string): boolean =>
     file !== rootGoMod && isInside(root, file);
-  const searches =
-    globPatterns && globPatterns.length > 0
-      ? globPatterns.map((pattern) => ({
-          pattern,
-          found: matchParts(root, pattern.split('/')),
-        }))
-      : [{ pattern: undefined, found: walkForGoMods(root) }];
+  const searches: Search[] = [];
+  if (globPatterns && globPatterns.length > 0) {
+    for (const pattern of globPatterns) {
+      searches.push({
+        pattern,
+        found: await matchParts(root, pattern.split('/')),
+      });
+    }
+  } else {
+    searches.push({ pattern: null, found: await walkForGoMods(root) });
+  }
   new Set(
     searches
       .flatMap(({ found }) => found.skipped)
@@ -133,7 +168,7 @@ function discoverSubmoduleGoMods(
   searches
     .filter(
       ({ pattern, found }) =>
-        pattern !== undefined && !found.files.some(isSubmodule),
+        pattern !== null && !found.files.some((file) => isSubmodule(file)),
     )
     .forEach(({ pattern }) => {
       logger.warn(
@@ -143,9 +178,11 @@ function discoverSubmoduleGoMods(
     });
   return [
     ...new Set(
-      searches.flatMap(({ found }) => found.files).filter(isSubmodule),
+      searches
+        .flatMap(({ found }) => found.files)
+        .filter((file) => isSubmodule(file)),
     ),
-  ].toSorted();
+  ].toSorted((a, b) => a.localeCompare(b));
 }
 
 /**
@@ -154,26 +191,34 @@ function discoverSubmoduleGoMods(
  * ignored.
  * @param dir - Absolute path of the directory to walk.
  * @returns Every go.mod file below it, including one directly inside it.
+ * @example
+ * const { files } = await walkForGoMods('/repo');
  */
-function walkForGoMods(dir: string): Found {
-  const { files, searchable, ignored } = scan(dir);
-  return merge([
+async function walkForGoMods(dir: string): Promise<Found> {
+  const { files, searchable, ignored } = await scan(dir);
+  const parts: Found[] = [
     {
       files: files.includes('go.mod') ? [path.join(dir, 'go.mod')] : [],
       skipped: ignored,
     },
-    ...searchable.map(walkForGoMods),
-  ]);
+  ];
+  for (const sub of searchable) {
+    parts.push(await walkForGoMods(sub));
+  }
+  return merge(parts);
 }
 
 /**
  * Whether a path is a directory itself, not a link to one.
  * @param target - Absolute path to check.
  * @returns True for a real directory.
+ * @example
+ * await isRealDirectory('/repo/assert'); // true, unless it is a symlink
  */
-function isRealDirectory(target: string): boolean {
+async function isRealDirectory(target: string): Promise<boolean> {
   try {
-    return fs.lstatSync(target).isDirectory();
+    const info = await lstat(target);
+    return info.isDirectory();
   } catch {
     return false;
   }
@@ -186,6 +231,9 @@ function isRealDirectory(target: string): boolean {
  * @param file - Absolute path to a file.
  * @param pathApi - Path implementation (injectable to test Windows paths).
  * @returns True when the file is below the root.
+ * @example
+ * isInside('/repo', '/repo/assert/go.mod'); // true
+ * isInside('/repo', '/other/go.mod'); // false
  */
 export function isInside(
   root: string,
@@ -210,8 +258,13 @@ export function isInside(
  * @param dir - Absolute path of the directory to match in.
  * @param parts - Pattern segments still to be matched.
  * @returns The matching files, and the ignored directories passed over.
+ * @example
+ * const { files } = await matchParts('/repo', ['assert', '**', 'go.mod']);
  */
-function matchParts(dir: string, parts: readonly string[]): Found {
+async function matchParts(
+  dir: string,
+  parts: readonly string[],
+): Promise<Found> {
   const none: Found = { files: [], skipped: [] };
   if (parts.length === 0) return none;
   const [head, ...tail] = parts;
@@ -219,21 +272,23 @@ function matchParts(dir: string, parts: readonly string[]): Found {
   if (head === '**') {
     // Zero levels: continue with the tail from the current dir.
     // One or more levels: descend into each subdirectory.
-    const { searchable, ignored } = scan(dir);
-    return merge([
-      matchParts(dir, tail),
+    const { searchable, ignored } = await scan(dir);
+    const parts2: Found[] = [
+      await matchParts(dir, tail),
       { files: [], skipped: ignored },
-      ...searchable.map((sub) => matchParts(sub, parts)),
-    ]);
+    ];
+    for (const sub of searchable) {
+      parts2.push(await matchParts(sub, parts));
+    }
+    return merge(parts2);
   }
 
   if (tail.length === 0) {
     // Last segment: must be a regular file (one lstat avoids a TOCTOU race).
     const candidate = path.join(dir, head);
     try {
-      return fs.lstatSync(candidate).isFile()
-        ? { files: [candidate], skipped: [] }
-        : none;
+      const info = await lstat(candidate);
+      return info.isFile() ? { files: [candidate], skipped: [] } : none;
     } catch {
       return none;
     }
@@ -241,16 +296,17 @@ function matchParts(dir: string, parts: readonly string[]): Found {
 
   if (head === '*') {
     // Single-level wildcard
-    const { searchable, ignored } = scan(dir);
-    return merge([
-      { files: [], skipped: ignored },
-      ...searchable.map((sub) => matchParts(sub, tail)),
-    ]);
+    const { searchable, ignored } = await scan(dir);
+    const parts2: Found[] = [{ files: [], skipped: ignored }];
+    for (const sub of searchable) {
+      parts2.push(await matchParts(sub, tail));
+    }
+    return merge(parts2);
   }
 
   // Literal segment: a missing path, or a link, matches nothing.
   const next = path.join(dir, head);
-  return isRealDirectory(next) ? matchParts(next, tail) : none;
+  return (await isRealDirectory(next)) ? matchParts(next, tail) : none;
 }
 
 /**
@@ -263,6 +319,8 @@ function matchParts(dir: string, parts: readonly string[]): Found {
  * @param repoRoot - Absolute path to the repository root.
  * @param pathApi - Path implementation (injectable to test Windows paths).
  * @returns Tag prefix with `/` separators (empty for the root module).
+ * @example
+ * tagPrefix('/repo/assert/cert/go.mod', '/repo'); // 'assert/cert'
  */
 export function tagPrefix(
   goModPath: string,
@@ -280,7 +338,7 @@ export function tagPrefix(
  */
 export interface GoModuleOptions {
   /** Runs a program; defaults to the real, shell-free runner. */
-  readonly run?: Runner | undefined;
+  readonly run?: Runner;
 }
 
 /**
@@ -295,8 +353,11 @@ export class GoModule {
   private readonly run: Runner;
 
   /**
+   * Create a module handle for a go.mod file without reading it.
    * @param file - Absolute path to the go.mod file.
    * @param run - Runs `go`.
+   * @example
+   * const module = GoModule.open('/repo/go.mod'); // the public entry point
    */
   private constructor(file: string, run: Runner) {
     this.file = file;
@@ -307,7 +368,9 @@ export class GoModule {
    * Open a go.mod file.
    * @param file - Absolute path to the go.mod file.
    * @param options - For tests, a runner.
-   * @returns The module.
+   * @returns A handle on the file, which need not be read yet.
+   * @example
+   * const goMod = GoModule.open('/repo/assert/go.mod');
    */
   static open(file: string, options: GoModuleOptions = {}): GoModule {
     return new GoModule(file, options.run ?? defaultRun);
@@ -322,25 +385,31 @@ export class GoModule {
    * @param logger - Where skipped directories and empty patterns are reported.
    * @param options - For tests, a runner.
    * @returns The submodules, sorted by path.
+   * @example
+   * const submodules = await GoModule.discover('/repo', undefined, context.logger);
    */
-  static discover(
+  static async discover(
     root: string,
     patterns: readonly string[] | undefined,
     logger: Logger,
     options: GoModuleOptions = {},
-  ): readonly GoModule[] {
-    return discoverSubmoduleGoMods(root, patterns, logger).map((file) =>
-      GoModule.open(file, options),
-    );
+  ): Promise<readonly GoModule[]> {
+    const files = await discoverSubmoduleGoMods(root, patterns, logger);
+    return files.map((file) => GoModule.open(file, options));
   }
+  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * The module's import path, e.g. `github.com/mridang/wilhelm`.
    * @returns The path of its `module` declaration.
    * @throws Error if the file has no readable `module` declaration.
+   * @rejects Error if the file has no readable `module` declaration, or the
+   * file cannot be read.
+   * @example
+   * const importPath = await GoModule.open('/repo/go.mod').modulePath();
    */
-  modulePath(): string {
-    const content = fs.readFileSync(this.file, 'utf8');
+  async modulePath(): Promise<string> {
+    const content = await readFile(this.file, 'utf8');
     const line = content
       .split('\n')
       .find((candidate) => /^\uFEFF?module(?:\s|\(|$)/.test(candidate));
@@ -365,6 +434,7 @@ export class GoModule {
     }
     return token;
   }
+  /* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * The git tag a release gives this module: its directory relative to the
@@ -373,12 +443,15 @@ export class GoModule {
    * @param root - Absolute path to the repository root.
    * @param version - The version without a leading `v`.
    * @returns The tag name, e.g. `assert/cert/manager/v1.2.3`.
+   * @example
+   * GoModule.open('/repo/assert/go.mod').tagName('/repo', '1.2.3'); // 'assert/v1.2.3'
    */
   tagName(root: string, version: string): string {
     const prefix = tagPrefix(this.file, root);
     if (prefix === '') return `v${version}`;
     return `${prefix}/v${version}`;
   }
+  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * Pin every `require` of the root module (or one of its sub-paths) to a
@@ -386,9 +459,12 @@ export class GoModule {
    * @param rootModule - The root module's import path.
    * @param version - The new version without a leading `v`.
    * @returns This module.
+   * @rejects Error when the file cannot be read or written.
+   * @example
+   * await GoModule.open('/repo/assert/go.mod').pin('github.com/acme/repo', '1.2.3');
    */
-  pin(rootModule: string, version: string): GoModule {
-    const content = fs.readFileSync(this.file, 'utf8');
+  async pin(rootModule: string, version: string): Promise<GoModule> {
+    const content = await readFile(this.file, 'utf8');
     // Escape slashes and dots in the module path for use in regex
     const escaped = rootModule.replaceAll(
       /[.*+?^${}()|[\]\\]/g,
@@ -421,18 +497,24 @@ export class GoModule {
       )
       .replace(single, pin);
     if (updated !== content) {
-      fs.writeFileSync(this.file, updated, 'utf8');
+      await writeFile(this.file, updated, 'utf8');
     }
     return this;
   }
+  /* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
+  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * Run `go mod tidy` in the module's directory.
    * @returns This module.
    * @throws Whatever `go` failed with, for the caller to report.
+   * @rejects Whatever `go` failed with, for the caller to report.
+   * @example
+   * await GoModule.open('/repo/assert/go.mod').tidy();
    */
   async tidy(): Promise<GoModule> {
     await this.run('go', ['mod', 'tidy'], { cwd: path.dirname(this.file) });
     return this;
   }
+  /* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 }

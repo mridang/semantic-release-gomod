@@ -1,3 +1,8 @@
+/**
+ * @file Runs external programs without a shell and turns their failures into
+ * credential-safe errors.
+ */
+
 import { execFile } from 'node:child_process';
 import { codeOf, messageOf, signalOf, statusOf } from './error.js';
 import { isRecord } from './object.js';
@@ -57,8 +62,16 @@ export class ExecError extends Error {
   readonly stderr: string;
 
   /**
+   * Create the error for a command that could not start or failed.
    * @param message - Description of the failure, already free of credentials.
    * @param details - The code, exit status, signal and captured output.
+   * @param details.code - System error code, such as `ENOENT`.
+   * @param details.status - Exit code of a command that ran and failed.
+   * @param details.signal - Signal that killed the command.
+   * @param details.stdout - Captured standard output.
+   * @param details.stderr - Captured standard error.
+   * @example
+   * throw new ExecError('git failed', { code: undefined, status: 1, signal: undefined, stdout: '', stderr: '' });
    */
   constructor(
     message: string,
@@ -91,7 +104,10 @@ export class ExecError extends Error {
  * output limit.
  * @returns The standard output as a string.
  * @throws ExecError when the program cannot be started, fails or times out;
- *   its message and output have credentials redacted.
+ * its message and output have credentials redacted.
+ * @example
+ * const version = await run('git', ['--version']);
+ * console.log(version.trim()); // 'git version 2.45.0'
  */
 export const run: Runner = (file, args, options = {}) =>
   new Promise((resolve, reject) => {
@@ -105,6 +121,8 @@ export const run: Runner = (file, args, options = {}) =>
         timeout: options.timeout,
         encoding: 'utf8',
       },
+      // execFile only reports through a callback; the Promise above is the boundary.
+      // eslint-disable-next-line promise/prefer-await-to-callbacks -- execFile reports through its callback, so the Promise wraps it
       (error, stdout, stderr) => {
         if (error === null) {
           resolve(stdout);

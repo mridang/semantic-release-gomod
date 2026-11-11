@@ -1,24 +1,33 @@
+/**
+ * @file Creates temporary directories populated with files for tests.
+ */
+
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import path from 'node:path';
 
 /**
  * Create a temporary directory populated with files, run a function in it and
  * remove it afterwards.
+ * @template T - The value the function resolves to.
  * @param files - Map of relative path to file contents.
  * @param fn - Function receiving the directory path.
  * @returns Whatever the function returns.
+ * @example
+ * const count = await withTmp({ 'go.mod': 'module a' }, async (dir) => {
+ *   return (await readdir(dir)).length;
+ * }); // 1
  */
 export async function withTmp<T>(
   files: Record<string, string | Buffer>,
   fn: (dir: string) => Promise<T>,
 ): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), 'gomod-test-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'gomod-test-'));
   try {
     await Promise.all(
       Object.entries(files).map(async ([name, contents]) => {
-        await mkdir(dirname(join(dir, name)), { recursive: true });
-        await writeFile(join(dir, name), contents);
+        await mkdir(path.dirname(path.join(dir, name)), { recursive: true });
+        await writeFile(path.join(dir, name), contents);
       }),
     );
     return await fn(dir);

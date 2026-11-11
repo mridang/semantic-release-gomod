@@ -1,3 +1,7 @@
+/**
+ * @file Tests that credentials are removed from text before it is logged.
+ */
+
 import { describe, expect, it } from '@jest/globals';
 // noinspection ES6PreferShortImport
 import { redactCredentials } from '../../src/utils/redact.js';

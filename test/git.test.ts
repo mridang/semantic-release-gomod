@@ -1,3 +1,8 @@
+/**
+ * @file Tests the git wrapper: tag lookups, validity checks, creation and push,
+ * with the runner replaced by a fake.
+ */
+
 import { describe, expect, it, jest } from '@jest/globals';
 import { GitRepository, Tag } from '../src/git.js';
 import type { ExecOptions, Runner } from '../src/utils/exec.js';
@@ -10,6 +15,8 @@ const OTHER = 'fedcba9876543210fedcba9876543210fedcba98';
  * A repository whose runner answers every command the same way.
  * @param outcome - What the runner returns, or the error it rejects with.
  * @returns The repository and the runner, to inspect its calls.
+ * @example
+ * const { repository, run } = repositoryThat('0123abc');
  */
 function repositoryThat(outcome: string | Error): {
   readonly repository: GitRepository;

@@ -1,3 +1,8 @@
+/**
+ * @file Tests the readers that pull the message, code, status and signal out of
+ * anything that was thrown.
+ */
+
 import { describe, expect, it } from '@jest/globals';
 // noinspection ES6PreferShortImport
 import {
@@ -58,11 +63,20 @@ describe('statusOf and signalOf', () => {
 describe('messageOf for errors without a message', () => {
   it('falls back to the code, the first inner error, then the name', () => {
     expect(
-      messageOf(Object.assign(new Error(''), { code: 'ECONNREFUSED' })),
+      messageOf(
+        Object.assign(new Error('x'), { message: '', code: 'ECONNREFUSED' }),
+      ),
     ).toBe('ECONNREFUSED');
     expect(
-      messageOf(Object.assign(new Error(''), { errors: [new Error('inner')] })),
+      messageOf(
+        Object.assign(new Error('x'), {
+          message: '',
+          errors: [new Error('inner')],
+        }),
+      ),
     ).toBe('inner');
-    expect(messageOf(new Error(''))).toBe('Error');
+    expect(messageOf(Object.assign(new Error('x'), { message: '' }))).toBe(
+      'Error',
+    );
   });
 });
