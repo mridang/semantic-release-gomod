@@ -2,7 +2,7 @@
  * @file Creates real git repositories for tests that need one on disk.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileAsync } from './exec.js';
 
 /**
  * Turn a directory into a git repository with one empty commit.
@@ -12,17 +12,19 @@ import { execFileSync } from 'node:child_process';
  * const git = initRepo('/tmp/gomod-test-repo');
  * git('rev-parse', 'HEAD');
  */
-export function initRepo(dir: string): (...args: readonly string[]) => string {
-  const git = (...args: readonly string[]): string =>
-    // eslint-disable-next-line n/no-sync -- sync is fine in a test fixture; the helper is called once per test
-    execFileSync(
-      // eslint-disable-next-line sonarjs/no-os-command-from-path -- test fixture runs the git on PATH that the suite itself uses
+export async function initRepo(
+  dir: string,
+): Promise<(...args: readonly string[]) => Promise<string>> {
+  const git = async (...args: readonly string[]): Promise<string> => {
+    const { stdout } = await execFileAsync(
       'git',
       ['-C', dir, '-c', 'user.name=test', '-c', 'user.email=t@e.com', ...args],
       { encoding: 'utf8' },
     );
-  git('init', '-q');
-  git('commit', '-q', '--allow-empty', '-m', 'one');
+    return stdout;
+  };
+  await git('init', '-q');
+  await git('commit', '-q', '--allow-empty', '-m', 'one');
   return git;
 }
 
@@ -32,11 +34,6 @@ export function initRepo(dir: string): (...args: readonly string[]) => string {
  * @example
  * initBare('/tmp/gomod-test-remote.git');
  */
-export function initBare(dir: string): void {
-  // eslint-disable-next-line n/no-sync -- sync is fine in a test fixture; the helper is called once per test
-  execFileSync(
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- test fixture runs the git on PATH that the suite itself uses
-    'git',
-    ['init', '--bare', '-q', dir],
-  );
+export async function initBare(dir: string): Promise<void> {
+  await execFileAsync('git', ['init', '--bare', '-q', dir]);
 }
