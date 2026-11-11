@@ -8,8 +8,7 @@ const OTHER = 'fedcba9876543210fedcba9876543210fedcba98';
 
 /**
  * A repository whose runner answers every command the same way.
- *
- * @param outcome What the runner returns, or the error it rejects with.
+ * @param outcome - What the runner returns, or the error it rejects with.
  * @returns The repository and the runner, to inspect its calls.
  */
 function repositoryThat(outcome: string | Error): {

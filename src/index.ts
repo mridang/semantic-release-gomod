@@ -33,10 +33,9 @@ const QUIET = { log: (): void => undefined, warn: (): void => undefined };
  * A warning (not an error) is emitted when no submodule go.mod files
  * are found, since the plugin is still useful for single-module repos
  * (it will create the root tag in the publish step).
- *
- * @param pluginConfig The plugin configuration.
- * @param context      The semantic-release context.
- * @param runner       Program runner (injectable for testing).
+ * @param pluginConfig - The plugin configuration.
+ * @param context - The semantic-release context.
+ * @param runner - Program runner (injectable for testing).
  */
 export async function verifyConditions(
   pluginConfig: GomodPluginConfig,
@@ -80,10 +79,9 @@ export async function verifyConditions(
  *
  * Optionally runs `go mod tidy` in each submodule directory afterward.
  * The actual commit is handled by `@semantic-release/git`.
- *
- * @param pluginConfig The plugin configuration.
- * @param context      The semantic-release context.
- * @param runner       Program runner (injectable for testing).
+ * @param pluginConfig - The plugin configuration.
+ * @param context - The semantic-release context.
+ * @param runner - Program runner (injectable for testing).
  */
 export async function prepare(
   pluginConfig: GomodPluginConfig,
@@ -127,11 +125,11 @@ export async function prepare(
     try {
       await submodule.tidy();
       logger.log('go mod tidy OK in %s', directory);
-    } catch (err: unknown) {
+    } catch (error: unknown) {
       logger.warn(
         'go mod tidy failed in %s: %s',
         directory,
-        redactCredentials(messageOf(err)),
+        redactCredentials(messageOf(error)),
       );
     }
   }
@@ -143,13 +141,12 @@ export async function prepare(
  * Create and push a git tag for every module in the repository,
  * including the root module.
  *
- * semantic-release creates the root tag (`vX.Y.Z`) before calling
+ * Semantic-release creates the root tag (`vX.Y.Z`) before calling
  * publish; this step skips it when it already exists at `HEAD` and then
- * creates all submodule tags (e.g. `assert/cert/manager/vX.Y.Z`).
- *
- * @param pluginConfig The plugin configuration.
- * @param context      The semantic-release context.
- * @param runner       Program runner (injectable for testing).
+ * creates all submodule tags (e.g. `assert/cert/manager/vX.Y.Z`)..
+ * @param pluginConfig - The plugin configuration.
+ * @param context - The semantic-release context.
+ * @param runner - Program runner (injectable for testing).
  */
 export async function publish(
   pluginConfig: GomodPluginConfig,

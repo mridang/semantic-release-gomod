@@ -15,8 +15,7 @@ type Logger = Pick<StepLogger, 'log' | 'warn'>;
  * under `.claude`). A go.mod below a dot-directory can never be released,
  * because neither a Go module path nor a git ref may have a component
  * starting with a dot. A literal path into one of them is still honoured.
- *
- * @param name A directory name.
+ * @param name - A directory name.
  * @returns True when the directory is not searched.
  */
 function isIgnoredDir(name: string): boolean {
@@ -35,8 +34,7 @@ interface Found {
 
 /**
  * Combine the results of several searches.
- *
- * @param parts The results to combine.
+ * @param parts - The results to combine.
  * @returns One result with all their files and skipped directories.
  */
 function merge(parts: readonly Found[]): Found {
@@ -48,8 +46,7 @@ function merge(parts: readonly Found[]): Found {
 
 /**
  * Read a directory, returning an empty array on any I/O error.
- *
- * @param dir Absolute path of the directory.
+ * @param dir - Absolute path of the directory.
  * @returns Its entries, or an empty array when it cannot be read.
  */
 function safeReadDir(dir: string): readonly fs.Dirent[] {
@@ -77,8 +74,7 @@ interface Listing {
  * subdirectories to search, and the ignored subdirectories (skipped before
  * they are read, so a huge `node_modules` is never walked). A directory that
  * cannot be read is empty.
- *
- * @param dir Absolute path of the directory.
+ * @param dir - Absolute path of the directory.
  * @returns Names of its regular files, and the absolute paths of the
  * subdirectories to search and of those that are ignored.
  */
@@ -104,10 +100,9 @@ function scan(dir: string): Listing {
  * symlinked go.mod nor a symlinked directory, and a match outside the
  * repository is dropped. A pattern that matches nothing is reported with a
  * warning, and each skipped directory (other than `.git`) is reported once.
- *
- * @param root         Absolute path to the repository root.
- * @param globPatterns Optional array of glob patterns relative to root.
- * @param logger       Where skipped directories and empty patterns are reported.
+ * @param root - Absolute path to the repository root.
+ * @param globPatterns - Optional array of glob patterns relative to root.
+ * @param logger - Where skipped directories and empty patterns are reported.
  * @returns Sorted array of absolute go.mod paths (submodules only).
  */
 function discoverSubmoduleGoMods(
@@ -157,8 +152,7 @@ function discoverSubmoduleGoMods(
  * Recursively walk `dir` and find all go.mod files, skipping the ignored
  * directories. Only regular files count, so a symlink named go.mod is
  * ignored.
- *
- * @param dir Absolute path of the directory to walk.
+ * @param dir - Absolute path of the directory to walk.
  * @returns Every go.mod file below it, including one directly inside it.
  */
 function walkForGoMods(dir: string): Found {
@@ -174,8 +168,7 @@ function walkForGoMods(dir: string): Found {
 
 /**
  * Whether a path is a directory itself, not a link to one.
- *
- * @param target Absolute path to check.
+ * @param target - Absolute path to check.
  * @returns True for a real directory.
  */
 function isRealDirectory(target: string): boolean {
@@ -189,10 +182,9 @@ function isRealDirectory(target: string): boolean {
 /**
  * Whether a file lies inside the repository, judged on the resolved
  * relative path so `..` and other drives are caught whatever the separator.
- *
- * @param root    Absolute path to the repository root.
- * @param file    Absolute path to a file.
- * @param pathApi Path implementation (injectable to test Windows paths).
+ * @param root - Absolute path to the repository root.
+ * @param file - Absolute path to a file.
+ * @param pathApi - Path implementation (injectable to test Windows paths).
  * @returns True when the file is below the root.
  */
 export function isInside(
@@ -215,9 +207,8 @@ export function isInside(
  * segment is a literal name. The last segment must be a regular file (not a
  * symlink, like in auto-discovery). Wildcards do not descend into ignored
  * directories, but a literal segment may name one.
- *
- * @param dir    Absolute path of the directory to match in.
- * @param parts  Pattern segments still to be matched.
+ * @param dir - Absolute path of the directory to match in.
+ * @param parts - Pattern segments still to be matched.
  * @returns The matching files, and the ignored directories passed over.
  */
 function matchParts(dir: string, parts: readonly string[]): Found {
@@ -267,11 +258,10 @@ function matchParts(dir: string, parts: readonly string[]): Found {
  * and the repository root.
  *
  * - Root module (`./go.mod`)                → `""` (tag = `"v1.2.3"`)
- * - Submodule (`./assert/cert/manager/go.mod`) → `"assert/cert/manager"`
- *
- * @param goModPath Absolute path to the go.mod file.
- * @param repoRoot  Absolute path to the repository root.
- * @param pathApi   Path implementation (injectable to test Windows paths).
+ * - Submodule (`./assert/cert/manager/go.mod`) → `"assert/cert/manager"`.
+ * @param goModPath - Absolute path to the go.mod file.
+ * @param repoRoot - Absolute path to the repository root.
+ * @param pathApi - Path implementation (injectable to test Windows paths).
  * @returns Tag prefix with `/` separators (empty for the root module).
  */
 export function tagPrefix(
@@ -305,8 +295,8 @@ export class GoModule {
   private readonly run: Runner;
 
   /**
-   * @param file Absolute path to the go.mod file.
-   * @param run  Runs `go`.
+   * @param file - Absolute path to the go.mod file.
+   * @param run - Runs `go`.
    */
   private constructor(file: string, run: Runner) {
     this.file = file;
@@ -315,9 +305,8 @@ export class GoModule {
 
   /**
    * Open a go.mod file.
-   *
-   * @param file    Absolute path to the go.mod file.
-   * @param options For tests, a runner.
+   * @param file - Absolute path to the go.mod file.
+   * @param options - For tests, a runner.
    * @returns The module.
    */
   static open(file: string, options: GoModuleOptions = {}): GoModule {
@@ -328,11 +317,10 @@ export class GoModule {
    * Find the submodules of a repository: every go.mod below the root except
    * the root-level one, or the ones the glob patterns match. See the README
    * for which directories are skipped and which patterns are supported.
-   *
-   * @param root     Absolute path to the repository root.
-   * @param patterns Optional glob patterns relative to the root.
-   * @param logger   Where skipped directories and empty patterns are reported.
-   * @param options  For tests, a runner.
+   * @param root - Absolute path to the repository root.
+   * @param patterns - Optional glob patterns relative to the root.
+   * @param logger - Where skipped directories and empty patterns are reported.
+   * @param options - For tests, a runner.
    * @returns The submodules, sorted by path.
    */
   static discover(
@@ -348,7 +336,6 @@ export class GoModule {
 
   /**
    * The module's import path, e.g. `github.com/mridang/wilhelm`.
-   *
    * @returns The path of its `module` declaration.
    * @throws Error if the file has no readable `module` declaration.
    */
@@ -383,9 +370,8 @@ export class GoModule {
    * The git tag a release gives this module: its directory relative to the
    * repository root, then `/v<version>`; the root module's tag is just
    * `v<version>`.
-   *
-   * @param root    Absolute path to the repository root.
-   * @param version The version without a leading `v`.
+   * @param root - Absolute path to the repository root.
+   * @param version - The version without a leading `v`.
    * @returns The tag name, e.g. `assert/cert/manager/v1.2.3`.
    */
   tagName(root: string, version: string): string {
@@ -397,36 +383,38 @@ export class GoModule {
   /**
    * Pin every `require` of the root module (or one of its sub-paths) to a
    * new version, leaving every other byte of the file alone.
-   *
-   * @param rootModule The root module's import path.
-   * @param version    The new version without a leading `v`.
+   * @param rootModule - The root module's import path.
+   * @param version - The new version without a leading `v`.
    * @returns This module.
    */
   pin(rootModule: string, version: string): GoModule {
     const content = fs.readFileSync(this.file, 'utf8');
     // Escape slashes and dots in the module path for use in regex
-    const escaped = rootModule.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escaped = rootModule.replaceAll(
+      /[.*+?^${}()|[\]\\]/g,
+      String.raw`\$&`,
+    );
     // The path must be the root module or one of its sub-paths, so `repo` does
     // not match `repository` or `repo-x`.
     // A first sub-path segment such as `/v2` is a different module (a new
     // major version), so it is not pinned to this one's release.
     // A path may be quoted with " or a backtick (written as an escape here).
-    const quoteChars = '"\\u0060';
+    const quoteChars = String.raw`"\u0060`;
     const quote = `[${quoteChars}]?`;
-    const requirePath = `${quote}${escaped}(?:/(?!v[0-9]+(?:/|[${quoteChars}]|[ \\t]))[^\\s${quoteChars}]*)?`;
-    const versionPattern = `(${quote})([ \\t]+)v[0-9]\\S*`;
+    const requirePath = String.raw`${quote}${escaped}(?:/(?!v[0-9]+(?:/|[${quoteChars}]|[ \t]))[^\s${quoteChars}]*)?`;
+    const versionPattern = String.raw`(${quote})([ \t]+)v[0-9]\S*`;
     const inBlock = new RegExp(
-      `^([ \\t]*${requirePath})${versionPattern}`,
+      String.raw`^([ \t]*${requirePath})${versionPattern}`,
       'gm',
     );
     const single = new RegExp(
-      `^([ \\t]*require[ \\t]+${requirePath})${versionPattern}`,
+      String.raw`^([ \t]*require[ \t]+${requirePath})${versionPattern}`,
       'gm',
     );
     const pin = `$1$2$3v${version}`;
     // Only `require` directives are pinned, never replace, exclude or retract.
     const updated = content
-      .replace(
+      .replaceAll(
         /(^[ \t]*require[ \t]*\([ \t]*(?:\/\/[^\r\n]*)?\r?\n)([\s\S]*?)(^[ \t]*\))/gm,
         (_match, open: string, body: string, close: string) =>
           `${open}${body.replace(inBlock, pin)}${close}`,
@@ -440,7 +428,6 @@ export class GoModule {
 
   /**
    * Run `go mod tidy` in the module's directory.
-   *
    * @returns This module.
    * @throws Whatever `go` failed with, for the caller to report.
    */

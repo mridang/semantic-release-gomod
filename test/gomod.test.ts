@@ -9,9 +9,8 @@ import { withTmp } from './utils/tmpdir.js';
 
 /**
  * Discover submodules, ignoring what is logged.
- *
- * @param root Repository root.
- * @param patterns Optional glob patterns.
+ * @param root - Repository root.
+ * @param patterns - Optional glob patterns.
  * @returns The go.mod files found.
  */
 const discover = (
@@ -439,15 +438,25 @@ describe('isInside', () => {
   });
 
   it.each([
-    ['a file below the root', 'C:\\repo', 'C:\\repo\\a\\go.mod', true],
+    [
+      'a file below the root',
+      String.raw`C:\repo`,
+      String.raw`C:\repo\a\go.mod`,
+      true,
+    ],
     [
       'a backslash path that climbs out',
-      'C:\\repo',
-      'C:\\repo\\..\\x\\go.mod',
+      String.raw`C:\repo`,
+      String.raw`C:\repo\..\x\go.mod`,
       false,
     ],
-    ['another drive', 'C:\\repo', 'D:\\repo\\go.mod', false],
-    ['a differently cased path', 'C:\\Repo', 'c:\\repo\\a\\go.mod', true],
+    ['another drive', String.raw`C:\repo`, String.raw`D:\repo\go.mod`, false],
+    [
+      'a differently cased path',
+      String.raw`C:\Repo`,
+      String.raw`c:\repo\a\go.mod`,
+      true,
+    ],
   ])('on win32: %s', (_name, root, file, expected) => {
     expect(isInside(root, file, path.win32)).toBe(expected);
   });
@@ -792,7 +801,11 @@ describe('tagPrefix', () => {
 
   it('uses forward slashes whatever the platform separator', () => {
     expect(
-      tagPrefix('C:\\repo\\assert\\cert\\go.mod', 'C:\\repo', path.win32),
+      tagPrefix(
+        String.raw`C:\repo\assert\cert\go.mod`,
+        String.raw`C:\repo`,
+        path.win32,
+      ),
     ).toBe('assert/cert');
   });
 

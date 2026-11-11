@@ -11,8 +11,7 @@ import { recordingLogger } from './logger.js';
 
 /**
  * The error a program throws when it exits with a status.
- *
- * @param status The exit status; git answers a yes/no question with 1.
+ * @param status - The exit status; git answers a yes/no question with 1.
  * @returns An error carrying `status`, like the ones `defaultExec` throws.
  */
 export function exitedWith(status: number): Error {
@@ -30,10 +29,9 @@ export const HEAD = '0123456789abcdef0123456789abcdef01234567';
  * A command executor that records its calls and optionally fails. It answers
  * the git queries the plugin makes: `HEAD` is `HEAD`, and a tag lookup
  * succeeds only for the tags that already exist.
- *
- * @param behaviour Called with each other command (program and arguments joined by spaces), and may throw to fail it.
- * @param existingTags Tags that already exist, each with the commit it points at.
- * @param remoteTags Tags on the remote, each with the commit it points at.
+ * @param behaviour - Called with each other command (program and arguments joined by spaces), and may throw to fail it.
+ * @param existingTags - Tags that already exist, each with the commit it points at.
+ * @param remoteTags - Tags on the remote, each with the commit it points at.
  * @returns A mock usable wherever an `Runner` is expected.
  */
 export function mockExec(
@@ -65,8 +63,7 @@ export function mockExec(
 
 /**
  * A repository at `/repo` whose programs run through a fake runner.
- *
- * @param run The fake runner, usually from `mockExec`.
+ * @param run - The fake runner, usually from `mockExec`.
  * @returns The repository.
  */
 export function repoWith(run: Runner): GitRepository {
@@ -75,9 +72,8 @@ export function repoWith(run: Runner): GitRepository {
 
 /**
  * Tags of a repository, by name.
- *
- * @param repository The repository.
- * @param names      The tag names.
+ * @param repository - The repository.
+ * @param names - The tag names.
  * @returns A tag for each name, in order.
  */
 export function tagsOf(
@@ -89,8 +85,7 @@ export function tagsOf(
 
 /**
  * The commands an executor was asked to run, each as one string.
- *
- * @param exec A mock made by `mockExec`.
+ * @param exec - A mock made by `mockExec`.
  * @returns The program and arguments of each call, joined by spaces.
  */
 export function commandsOf(exec: jest.Mock<Runner>): readonly string[] {
@@ -102,9 +97,8 @@ export function commandsOf(exec: jest.Mock<Runner>): readonly string[] {
  * dozens of members (streams, branches, commits) that the plugin never reads,
  * so this is the single place in the tests that builds it from the few it
  * does, and the only place that needs a cast.
- *
- * @param cwd The repository directory.
- * @param version The version being released.
+ * @param cwd - The repository directory.
+ * @param version - The version being released.
  * @returns The context, typed for each step, and the lines logged through it.
  */
 export function stepContext(
@@ -128,8 +122,7 @@ export function stepContext(
 
 /**
  * A plugin config with values of any type, as a config file can contain.
- *
- * @param options The raw option values.
+ * @param options - The raw option values.
  * @returns The same object, typed as a plugin config.
  */
 export function rawConfig(

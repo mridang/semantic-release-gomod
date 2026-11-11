@@ -1,8 +1,7 @@
 /**
  * The contents of a go.mod file.
- *
- * @param modulePath The module declaration, for example `github.com/a/b`.
- * @param requires Lines for the require block, such as `github.com/a/b v1.0.0`.
+ * @param modulePath - The module declaration, for example `github.com/a/b`.
+ * @param requires - Lines for the require block, such as `github.com/a/b v1.0.0`.
  * @returns The file contents.
  */
 export function goMod(

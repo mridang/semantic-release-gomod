@@ -17,9 +17,8 @@ interface PlannedTag {
 /**
  * Run an asynchronous step for each item, one after the other, so that no
  * more than one child process runs at a time.
- *
- * @param items The items.
- * @param step  The step for one item.
+ * @param items - The items.
+ * @param step - The step for one item.
  * @returns What the steps returned, in order.
  */
 function sequentially<T, R>(
@@ -43,8 +42,8 @@ export class Release {
   private readonly push: boolean;
 
   /**
-   * @param planned The tags, and what is already done for each.
-   * @param push    Whether the tags are pushed to `origin`.
+   * @param planned - The tags, and what is already done for each.
+   * @param push - Whether the tags are pushed to `origin`.
    */
   private constructor(planned: readonly PlannedTag[], push: boolean) {
     this.planned = planned;
@@ -56,8 +55,7 @@ export class Release {
    * release before anything is changed. Run it as early as the lifecycle
    * allows: once semantic-release has pushed the release commit and the root
    * tag, a later failure leaves a half published release.
-   *
-   * @param tags Every tag the release will create.
+   * @param tags - Every tag the release will create.
    * @throws SemanticReleaseError `EINVALIDTAG` listing every refused name.
    */
   static async check(tags: readonly Tag[]): Promise<void> {
@@ -76,10 +74,9 @@ export class Release {
    * or (when pushing) on the remote, with `HEAD`. A tag at another commit
    * would publish old code under the new version, so it stops the release;
    * a tag at `HEAD` is left as it is, so a re-run is safe.
-   *
-   * @param repository The repository.
-   * @param tags       Every tag the release will create.
-   * @param push       Whether the tags will be pushed, so the remote is read.
+   * @param repository - The repository.
+   * @param tags - Every tag the release will create.
+   * @param push - Whether the tags will be pushed, so the remote is read.
    * @returns The release, ready to publish.
    * @throws SemanticReleaseError `EINVALIDTAG` or `ETAGMISMATCH`.
    */
@@ -130,8 +127,7 @@ export class Release {
    * tag), one after the other. A tag that is already on `origin` at `HEAD`
    * is neither created nor pushed again, because its object (for example an
    * annotated tag made elsewhere) would differ and the push be rejected.
-   *
-   * @param logger semantic-release logger.
+   * @param logger - Semantic-release logger.
    * @returns The tags of the release.
    */
   async publish(logger: Pick<StepLogger, 'log'>): Promise<readonly Tag[]> {

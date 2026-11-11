@@ -17,7 +17,6 @@ export interface GomodPluginConfig extends Config {
    * Glob patterns (relative to cwd) that match submodule go.mod files.
    * When omitted, the plugin walks the repository and treats every
    * go.mod file except the root-level one as a submodule.
-   *
    * @example ["assert/**\/go.mod", "env/**\/go.mod"]
    */
   readonly modules?: string | readonly string[];
@@ -64,8 +63,7 @@ export interface ResolvedConfig {
  * which signals the plugin to auto-discover. `null` (as config files such as
  * JSON and YAML write it) counts as unset for every option with a default, and
  * so does any other falsy `modules`.
- *
- * @param config The plugin configuration.
+ * @param config - The plugin configuration.
  * @returns The resolved options.
  * @throws SemanticReleaseError `EINVALIDMODULES` when `modules` is neither a
  * string nor an array of strings, or `EINVALIDSKIPGOMODTIDY` and
@@ -95,11 +93,10 @@ export function resolveConfig(config: GomodPluginConfig): ResolvedConfig {
  * spellings a config file or an environment variable easily produces are
  * accepted too: the strings `"true"` and `"false"` in any case, and `1` and
  * `0`.
- *
- * @param name The option name, for the error.
- * @param code The error code to throw for a value that is none of these.
- * @param value The raw option value.
- * @param fallback The value when the option is not set.
+ * @param name - The option name, for the error.
+ * @param code - The error code to throw for a value that is none of these.
+ * @param value - The raw option value.
+ * @param fallback - The value when the option is not set.
  * @returns The option as a boolean.
  * @throws SemanticReleaseError with `code` for any other value.
  */
@@ -128,8 +125,7 @@ function resolveFlag(
 /**
  * Whether a glob pattern uses only what the matcher supports: literal names,
  * and `*` or `**` as a whole segment, without leaving the repository.
- *
- * @param pattern A glob pattern using `/` separators.
+ * @param pattern - A glob pattern using `/` separators.
  * @returns True when every segment is supported.
  */
 function isSupportedPattern(pattern: string): boolean {
@@ -144,8 +140,7 @@ function isSupportedPattern(pattern: string): boolean {
 
 /**
  * Reject glob patterns the matcher would silently treat as literal names.
- *
- * @param patterns The glob patterns.
+ * @param patterns - The glob patterns.
  * @returns The same patterns.
  * @throws SemanticReleaseError `EINVALIDMODULES` listing the unsupported ones.
  */
@@ -163,8 +158,7 @@ function checkPatterns(patterns: readonly string[]): readonly string[] {
 
 /**
  * Check and normalise the `modules` option.
- *
- * @param modules The raw option value.
+ * @param modules - The raw option value.
  * @returns The glob patterns, or undefined to auto-discover.
  * @throws SemanticReleaseError `EINVALIDMODULES` for any other type.
  */
@@ -188,8 +182,7 @@ function resolveModules(modules: unknown): readonly string[] | undefined {
 /**
  * The directory a step runs in: the one semantic-release was given, or else
  * the current directory, which is its own default.
- *
- * @param context A semantic-release step context.
+ * @param context - A semantic-release step context.
  * @returns The working directory.
  */
 export function cwdOf(context: { readonly cwd?: string | undefined }): string {
