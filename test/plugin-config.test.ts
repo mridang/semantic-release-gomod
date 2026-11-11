@@ -1,3 +1,7 @@
+/**
+ * @file Tests how the plugin options are read, defaulted and validated.
+ */
+
 import { describe, expect, it } from '@jest/globals';
 import { cwdOf, resolveConfig } from '../src/plugin-config.js';
 import { rawConfig } from './utils/context.js';
@@ -14,7 +18,7 @@ describe('resolveConfig', () => {
             pushTags: unset,
           }),
         ),
-      ).toEqual({ modules: undefined, skipGoModTidy: false, pushTags: true });
+      ).toEqual({ skipGoModTidy: false, pushTags: true });
     },
   );
 
@@ -77,8 +81,11 @@ describe('resolveConfig', () => {
     ['a character class', 'svc-[ab]/go.mod'],
     ['a double star inside a name', 'a**/go.mod'],
     ['a path that leaves the repository', '../other/go.mod'],
-    ['a backslash path that leaves the repository', '..\\\\other\\\\go.mod'],
-    ['a backslash separator', 'a\\\\b\\\\go.mod'],
+    [
+      'a backslash path that leaves the repository',
+      String.raw`..\\other\\go.mod`,
+    ],
+    ['a backslash separator', String.raw`a\\b\\go.mod`],
     ['a path that climbs out in the middle', 'a/../../go.mod'],
   ])('rejects %s', (_name, pattern) => {
     expect(() => resolveConfig(rawConfig({ modules: [pattern] }))).toThrow(
@@ -102,7 +109,6 @@ describe('resolveConfig', () => {
 
   it('keeps false as a real value for the boolean options', () => {
     expect(resolveConfig({ pushTags: false, skipGoModTidy: false })).toEqual({
-      modules: undefined,
       skipGoModTidy: false,
       pushTags: false,
     });
@@ -110,7 +116,6 @@ describe('resolveConfig', () => {
 
   it('applies the defaults to an empty config', () => {
     expect(resolveConfig({})).toEqual({
-      modules: undefined,
       skipGoModTidy: false,
       pushTags: true,
     });
@@ -150,6 +155,5 @@ describe('cwdOf', () => {
 
   it('falls back to the current directory', () => {
     expect(cwdOf({})).toBe(process.cwd());
-    expect(cwdOf({ cwd: undefined })).toBe(process.cwd());
   });
 });

@@ -1,3 +1,8 @@
+/**
+ * @file Plans and publishes the tags of a release, refusing any tag that would
+ * point at the wrong commit.
+ */
+
 import SemanticReleaseError from '@semantic-release/error';
 import type { GitRepository, Tag } from './git.js';
 import type { StepLogger } from './plugin-config.js';
@@ -17,10 +22,13 @@ interface PlannedTag {
 /**
  * Run an asynchronous step for each item, one after the other, so that no
  * more than one child process runs at a time.
- *
- * @param items The items.
- * @param step  The step for one item.
+ * @template T - The type of each item.
+ * @template R - The type each step resolves to.
+ * @param items - The items to visit, in order.
+ * @param step - The asynchronous step to run for one item.
  * @returns What the steps returned, in order.
+ * @example
+ * const doubled = await sequentially([1, 2], async (n) => n * 2); // [2, 4]
  */
 function sequentially<T, R>(
   items: readonly T[],
@@ -43,8 +51,11 @@ export class Release {
   private readonly push: boolean;
 
   /**
-   * @param planned The tags, and what is already done for each.
-   * @param push    Whether the tags are pushed to `origin`.
+   * Create a release from a planned set of tags.
+   * @param planned - The tags, and what is already done for each.
+   * @param push - Whether the tags are pushed to `origin`.
+   * @example
+   * const release = await Release.plan(repository, tags, true);
    */
   private constructor(planned: readonly PlannedTag[], push: boolean) {
     this.planned = planned;
@@ -56,9 +67,11 @@ export class Release {
    * release before anything is changed. Run it as early as the lifecycle
    * allows: once semantic-release has pushed the release commit and the root
    * tag, a later failure leaves a half published release.
-   *
-   * @param tags Every tag the release will create.
+   * @param tags - Every tag the release will create.
    * @throws SemanticReleaseError `EINVALIDTAG` listing every refused name.
+   * @rejects SemanticReleaseError `EINVALIDTAG` listing every refused name.
+   * @example
+   * await Release.check([repository.tag('assert/v1.2.3')]);
    */
   static async check(tags: readonly Tag[]): Promise<void> {
     const valid = await sequentially(tags, (tag) => tag.isValid());
@@ -76,12 +89,15 @@ export class Release {
    * or (when pushing) on the remote, with `HEAD`. A tag at another commit
    * would publish old code under the new version, so it stops the release;
    * a tag at `HEAD` is left as it is, so a re-run is safe.
-   *
-   * @param repository The repository.
-   * @param tags       Every tag the release will create.
-   * @param push       Whether the tags will be pushed, so the remote is read.
+   * @param repository - The git repository holding the tags and `HEAD`.
+   * @param tags - Every tag the release will create.
+   * @param push - Whether the tags will be pushed, so the remote is read.
    * @returns The release, ready to publish.
    * @throws SemanticReleaseError `EINVALIDTAG` or `ETAGMISMATCH`.
+   * @rejects SemanticReleaseError `EINVALIDTAG` or `ETAGMISMATCH`.
+   * @example
+   * const release = await Release.plan(repository, [repository.tag('v1.2.3')], true);
+   * await release.publish(context.logger);
    */
   static async plan(
     repository: GitRepository,
@@ -130,9 +146,10 @@ export class Release {
    * tag), one after the other. A tag that is already on `origin` at `HEAD`
    * is neither created nor pushed again, because its object (for example an
    * annotated tag made elsewhere) would differ and the push be rejected.
-   *
-   * @param logger semantic-release logger.
+   * @param logger - Semantic-release logger that reports each tag step.
    * @returns The tags of the release.
+   * @example
+   * const tags = await release.publish(context.logger);
    */
   async publish(logger: Pick<StepLogger, 'log'>): Promise<readonly Tag[]> {
     for (const { tag, exists, onRemote } of this.planned) {

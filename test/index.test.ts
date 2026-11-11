@@ -1,7 +1,11 @@
+/**
+ * @file Tests the semantic-release steps end to end against real temporary
+ * repositories, and the fake git the plugin is given in place of the real one.
+ */
+
 import { describe, expect, it } from '@jest/globals';
-import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { access, readFile } from 'node:fs/promises';
+import path from 'node:path';
 import plugin, { prepare, publish, verifyConditions } from '../src/index.js';
 import {
   commandsOf,
@@ -15,8 +19,24 @@ import { goMod } from './utils/go-mod.js';
 import { initBare, initRepo } from './utils/repo.js';
 import { withTmp } from './utils/tmpdir.js';
 
+/**
+ * Whether a file exists on disk.
+ * @param file - Absolute path to the file.
+ * @returns True when the file can be accessed.
+ * @example
+ * await exists('/repo/go.mod'); // true
+ */
+async function exists(file: string): Promise<boolean> {
+  try {
+    await access(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The at sign, spelled out so no secret scanner mistakes a fixture for a credential. */
-const AT = String.fromCharCode(64);
+const AT = String.fromCodePoint(64);
 const ROOT = 'github.com/example/repo';
 
 describe('default export', () => {
@@ -131,7 +151,7 @@ describe('a directory name git cannot tag', () => {
         await expect(
           prepare({}, stepContext(dir, '2.0.0').prepare, exec),
         ).rejects.toMatchObject({ code: 'EINVALIDTAG' });
-        expect(await readFile(join(dir, 'ok/go.mod'), 'utf8')).toContain(
+        expect(await readFile(path.join(dir, 'ok/go.mod'), 'utf8')).toContain(
           `${ROOT} v1.0.0`,
         );
         expect(commandsOf(exec).some((cmd) => cmd.startsWith('go '))).toBe(
@@ -183,7 +203,7 @@ describe('skipped directories and empty patterns', () => {
           l.startsWith('Not searching'),
         );
         expect(skipped).toHaveLength(1);
-        expect(skipped[0]).toContain(join(dir, 'vendor'));
+        expect(skipped[0]).toContain(path.join(dir, 'vendor'));
       },
     );
   });
@@ -205,18 +225,11 @@ describe('skipped directories and empty patterns', () => {
 
 describe('steps without a cwd in the context', () => {
   // The repository this suite runs in has no go.mod at its root.
-  const noCwd = stepContext('ignored');
+  const noCwd = stepContext();
 
   it.each([
-    [
-      'verifyConditions',
-      () =>
-        verifyConditions({}, { ...noCwd.verify, cwd: undefined }, mockExec()),
-    ],
-    [
-      'prepare',
-      () => prepare({}, { ...noCwd.prepare, cwd: undefined }, mockExec()),
-    ],
+    ['verifyConditions', () => verifyConditions({}, noCwd.verify, mockExec())],
+    ['prepare', () => prepare({}, noCwd.prepare, mockExec())],
   ])('%s looks for go.mod in the process directory', async (_step, run) => {
     await expect(run()).rejects.toThrow(
       expect.objectContaining({
@@ -227,7 +240,7 @@ describe('steps without a cwd in the context', () => {
 
   it('publish tags in the process directory', async () => {
     const exec = mockExec();
-    await publish({}, { ...noCwd.publish, cwd: undefined }, exec);
+    await publish({}, noCwd.publish, exec);
     expect(exec).toHaveBeenCalledWith(
       'git',
       ['tag', '--', 'v1.2.3'],
@@ -249,7 +262,7 @@ describe('prepare', () => {
         stepContext(dir, '2.0.0').prepare,
         mockExec(),
       );
-      expect(await readFile(join(dir, 'sub/go.mod'), 'utf8')).toContain(
+      expect(await readFile(path.join(dir, 'sub/go.mod'), 'utf8')).toContain(
         `${ROOT} v2.0.0`,
       );
     });
@@ -257,7 +270,7 @@ describe('prepare', () => {
 
   it('uses the real executor when none is injected and nothing needs running', async () => {
     await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
-      initRepo(dir);
+      await initRepo(dir);
       await expect(
         prepare(
           { skipGoModTidy: true, pushTags: false },
@@ -273,7 +286,7 @@ describe('prepare', () => {
       const { prepare: ctx, lines } = stepContext(dir, '2.0.0');
       await prepare({}, ctx, exec);
       expect(exec).toHaveBeenCalledWith('go', ['mod', 'tidy'], {
-        cwd: join(dir, 'sub'),
+        cwd: path.join(dir, 'sub'),
       });
       expect(lines).toContain('go mod tidy OK in %s sub');
       expect(lines).toContain('Prepared %d submodule(s) for v%s. 1 2.0.0');
@@ -307,7 +320,7 @@ describe('prepare', () => {
         stepContext(dir, '3.0.0').prepare,
         mockExec(),
       );
-      expect(await readFile(join(dir, 'sub/go.mod'), 'utf8')).toContain(
+      expect(await readFile(path.join(dir, 'sub/go.mod'), 'utf8')).toContain(
         `${ROOT} v3.0.0`,
       );
     });
@@ -356,9 +369,10 @@ describe('prepare', () => {
 describe('publish', () => {
   it('runs the real git when no executor is injected', async () => {
     await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
-      const git = initRepo(dir);
+      const git = await initRepo(dir);
       await publish({ pushTags: false }, stepContext(dir).publish);
-      expect(git('tag', '--list').trim()).toBe('v1.2.3');
+      const tags = await git('tag', '--list');
+      expect(tags.trim()).toBe('v1.2.3');
     });
   });
 });
@@ -374,10 +388,11 @@ describe('publish with hostile directory names', () => {
       await withTmp(
         { 'go.mod': goMod(ROOT), [`${name}/go.mod`]: goMod(`${ROOT}/x`) },
         async (dir) => {
-          const git = initRepo(dir);
+          const git = await initRepo(dir);
           await publish({ pushTags: false }, stepContext(dir).publish);
-          expect(git('tag', '--list').split('\n')).toContain(`${name}/v1.2.3`);
-          expect(existsSync(join(dir, 'INJECTED'))).toBe(false);
+          const tags = await git('tag', '--list');
+          expect(tags.split('\n')).toContain(`${name}/v1.2.3`);
+          expect(await exists(path.join(dir, 'INJECTED'))).toBe(false);
         },
       );
     },
@@ -389,13 +404,14 @@ describe('publish in a real repository', () => {
     await withTmp(
       { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
       async (dir) => {
-        const git = initRepo(dir);
-        git('tag', 'sub/v1.2.3');
-        git('commit', '-q', '--allow-empty', '-m', 'two');
+        const git = await initRepo(dir);
+        await git('tag', 'sub/v1.2.3');
+        await git('commit', '-q', '--allow-empty', '-m', 'two');
         await expect(
           publish({ pushTags: false }, stepContext(dir).publish),
         ).rejects.toMatchObject({ code: 'ETAGMISMATCH' });
-        expect(git('tag', '--list').trim()).toBe('sub/v1.2.3');
+        const tags = await git('tag', '--list');
+        expect(tags.trim()).toBe('sub/v1.2.3');
       },
     );
   });
@@ -405,22 +421,23 @@ describe('publish in a real repository', () => {
       await withTmp(
         { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
         async (dir) => {
-          const git = initRepo(dir);
-          initBare(remote);
-          git('remote', 'add', 'origin', remote);
-          git('tag', 'sub/v1.2.3');
-          git('push', '-q', 'origin', 'refs/tags/sub/v1.2.3');
-          git('tag', '-d', 'sub/v1.2.3');
-          git('commit', '-q', '--allow-empty', '-m', 'two');
+          const git = await initRepo(dir);
+          await initBare(remote);
+          await git('remote', 'add', 'origin', remote);
+          await git('tag', 'sub/v1.2.3');
+          await git('push', '-q', 'origin', 'refs/tags/sub/v1.2.3');
+          await git('tag', '-d', 'sub/v1.2.3');
+          await git('commit', '-q', '--allow-empty', '-m', 'two');
           await expect(
             publish({}, stepContext(dir).publish),
           ).rejects.toMatchObject({
             code: 'ETAGMISMATCH',
           });
-          expect(git('ls-remote', '--tags', 'origin')).not.toContain(
+          expect(await git('ls-remote', '--tags', 'origin')).not.toContain(
             'refs/tags/v1.2.3',
           );
-          expect(git('tag', '--list').trim()).toBe('');
+          const tags = await git('tag', '--list');
+          expect(tags.trim()).toBe('');
         },
       );
     });
@@ -431,17 +448,18 @@ describe('publish in a real repository', () => {
       await withTmp(
         { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
         async (dir) => {
-          const git = initRepo(dir);
-          initBare(remote);
-          git('remote', 'add', 'origin', remote);
-          git('tag', '-a', 'sub/v1.2.3', '-m', 'made elsewhere');
-          git('push', '-q', 'origin', 'refs/tags/sub/v1.2.3');
-          git('tag', '-d', 'sub/v1.2.3');
+          const git = await initRepo(dir);
+          await initBare(remote);
+          await git('remote', 'add', 'origin', remote);
+          await git('tag', '-a', 'sub/v1.2.3', '-m', 'made elsewhere');
+          await git('push', '-q', 'origin', 'refs/tags/sub/v1.2.3');
+          await git('tag', '-d', 'sub/v1.2.3');
           await publish({}, stepContext(dir).publish);
-          const remoteTags = git('ls-remote', '--tags', 'origin');
+          const remoteTags = await git('ls-remote', '--tags', 'origin');
           expect(remoteTags).toContain('refs/tags/v1.2.3');
           expect(remoteTags).toContain('refs/tags/sub/v1.2.3^{}');
-          expect(git('tag', '--list').trim()).toBe('v1.2.3');
+          const tags = await git('tag', '--list');
+          expect(tags.trim()).toBe('v1.2.3');
         },
       );
     });
@@ -449,8 +467,8 @@ describe('publish in a real repository', () => {
 
   it('treats an annotated tag at HEAD as already created', async () => {
     await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
-      const git = initRepo(dir);
-      git('tag', '-a', 'v1.2.3', '-m', 'release');
+      const git = await initRepo(dir);
+      await git('tag', '-a', 'v1.2.3', '-m', 'release');
       await expect(
         publish({ pushTags: false }, stepContext(dir).publish),
       ).resolves.toBeUndefined();
@@ -464,11 +482,12 @@ describe('publish in a real repository', () => {
     await withTmp(
       { 'go.mod': goMod(ROOT), [`${name}/go.mod`]: goMod(`${ROOT}/x`) },
       async (dir) => {
-        const git = initRepo(dir);
+        const git = await initRepo(dir);
         await expect(
           publish({ pushTags: false }, stepContext(dir).publish),
         ).rejects.toMatchObject({ code: 'EINVALIDTAG' });
-        expect(git('tag', '--list').trim()).toBe('');
+        const tags = await git('tag', '--list');
+        expect(tags.trim()).toBe('');
       },
     );
   });

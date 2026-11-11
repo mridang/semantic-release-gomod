@@ -1,3 +1,8 @@
+/**
+ * @file Builds the fake runners, repositories and semantic-release contexts
+ * that the plugin tests use in place of real git and semantic-release.
+ */
+
 import { jest } from '@jest/globals';
 import type {
   PrepareContext,
@@ -11,9 +16,10 @@ import { recordingLogger } from './logger.js';
 
 /**
  * The error a program throws when it exits with a status.
- *
- * @param status The exit status; git answers a yes/no question with 1.
+ * @param status - The exit status; git answers a yes/no question with 1.
  * @returns An error carrying `status`, like the ones `defaultExec` throws.
+ * @example
+ * throw exitedWith(1); // a git "no" answer
  */
 export function exitedWith(status: number): Error {
   return Object.assign(new Error(`Command failed with status ${status}`), {
@@ -30,11 +36,13 @@ export const HEAD = '0123456789abcdef0123456789abcdef01234567';
  * A command executor that records its calls and optionally fails. It answers
  * the git queries the plugin makes: `HEAD` is `HEAD`, and a tag lookup
  * succeeds only for the tags that already exist.
- *
- * @param behaviour Called with each other command (program and arguments joined by spaces), and may throw to fail it.
- * @param existingTags Tags that already exist, each with the commit it points at.
- * @param remoteTags Tags on the remote, each with the commit it points at.
+ * @param behaviour - Called with each other command, as program and arguments joined by spaces; it may throw to fail that command.
+ * @param existingTags - Tags that already exist, each with the commit it points at.
+ * @param remoteTags - Tags on the remote, each with the commit it points at.
  * @returns A mock usable wherever an `Runner` is expected.
+ * @example
+ * const exec = mockExec(undefined, { 'v1.0.0': HEAD });
+ * const repository = repoWith(exec);
  */
 export function mockExec(
   behaviour: (cmd: string) => void = () => undefined,
@@ -65,20 +73,22 @@ export function mockExec(
 
 /**
  * A repository at `/repo` whose programs run through a fake runner.
- *
- * @param run The fake runner, usually from `mockExec`.
+ * @param run - The fake runner, usually from `mockExec`.
  * @returns The repository.
+ * @example
+ * const repository = repoWith(mockExec());
  */
 export function repoWith(run: Runner): GitRepository {
   return GitRepository.open({ cwd: '/repo', run });
 }
 
 /**
- * Tags of a repository, by name.
- *
- * @param repository The repository.
- * @param names      The tag names.
+ * Look up several tags of a repository at once.
+ * @param repository - The repository to take the tags from.
+ * @param names - The names of the tags to look up.
  * @returns A tag for each name, in order.
+ * @example
+ * const [tag] = tagsOf(repository, ['assert/v1.2.3']);
  */
 export function tagsOf(
   repository: GitRepository,
@@ -89,9 +99,10 @@ export function tagsOf(
 
 /**
  * The commands an executor was asked to run, each as one string.
- *
- * @param exec A mock made by `mockExec`.
+ * @param exec - A mock made by `mockExec`.
  * @returns The program and arguments of each call, joined by spaces.
+ * @example
+ * commandsOf(exec); // ['git rev-parse HEAD']
  */
 export function commandsOf(exec: jest.Mock<Runner>): readonly string[] {
   return exec.mock.calls.map(([file, args]) => [file, ...args].join(' '));
@@ -102,13 +113,14 @@ export function commandsOf(exec: jest.Mock<Runner>): readonly string[] {
  * dozens of members (streams, branches, commits) that the plugin never reads,
  * so this is the single place in the tests that builds it from the few it
  * does, and the only place that needs a cast.
- *
- * @param cwd The repository directory.
- * @param version The version being released.
+ * @param cwd - The repository directory, or omitted for the process directory.
+ * @param version - The version being released.
  * @returns The context, typed for each step, and the lines logged through it.
+ * @example
+ * const { verify, lines } = stepContext('/repo');
  */
 export function stepContext(
-  cwd: string,
+  cwd?: string,
   version = '1.2.3',
 ): {
   readonly lines: string[];
@@ -117,7 +129,11 @@ export function stepContext(
   readonly publish: PublishContext;
 } {
   const { logger, lines } = recordingLogger();
-  const partial: unknown = { logger, cwd, nextRelease: { version } };
+  const partial: unknown = {
+    logger,
+    ...(cwd === undefined ? {} : { cwd }),
+    nextRelease: { version },
+  };
   return {
     lines,
     verify: partial as VerifyConditionsContext,
@@ -128,9 +144,10 @@ export function stepContext(
 
 /**
  * A plugin config with values of any type, as a config file can contain.
- *
- * @param options The raw option values.
+ * @param options - The raw option values.
  * @returns The same object, typed as a plugin config.
+ * @example
+ * const config = rawConfig({ pushTags: 'false' });
  */
 export function rawConfig(
   options: Readonly<Record<string, unknown>>,

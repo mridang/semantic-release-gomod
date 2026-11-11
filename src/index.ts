@@ -1,5 +1,10 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+/**
+ * @file The semantic-release lifecycle steps for a multi-module Go repository:
+ * verifying preconditions, pinning submodule requires, and tagging modules.
+ */
+
+import { access } from 'node:fs/promises';
+import path from 'node:path';
 import SemanticReleaseError from '@semantic-release/error';
 import type {
   PrepareContext,
@@ -25,18 +30,38 @@ import { redactCredentials } from './utils/redact.js';
 const QUIET = { log: (): void => undefined, warn: (): void => undefined };
 
 /**
+ * Whether a file exists, without throwing when it does not.
+ * @param file - Absolute path to the file.
+ * @returns True when the file can be accessed.
+ * @example
+ * if (await exists('/repo/go.mod')) console.log('Found the root module.');
+ */
+async function exists(file: string): Promise<boolean> {
+  try {
+    await access(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Verify that all preconditions for the plugin are met:
- *  - A root `go.mod` exists in the working directory.
- *  - `git` is available on PATH.
- *  - Every module directory can be used in a git tag.
+ * - A root `go.mod` exists in the working directory.
+ * - `git` is available on PATH.
+ * - Every module directory can be used in a git tag.
  *
- * A warning (not an error) is emitted when no submodule go.mod files
- * are found, since the plugin is still useful for single-module repos
+ * An informational message (not an error) is logged when no submodule go.mod
+ * files are found, since the plugin is still useful for single-module repos
  * (it will create the root tag in the publish step).
- *
- * @param pluginConfig The plugin configuration.
- * @param context      The semantic-release context.
- * @param runner       Program runner (injectable for testing).
+ * @param pluginConfig - The plugin configuration.
+ * @param context - The semantic-release context.
+ * @param runner - Program runner (injectable for testing).
+ * @throws SemanticReleaseError `EMISSINGGOMOD` when the root go.mod is missing.
+ * @rejects SemanticReleaseError `EMISSINGGOMOD` when the root go.mod is missing,
+ * or when git or a module tag is unusable.
+ * @example
+ * await verifyConditions({ modules: 'assert/**\/go.mod' }, context);
  */
 export async function verifyConditions(
   pluginConfig: GomodPluginConfig,
@@ -48,7 +73,7 @@ export async function verifyConditions(
   const config = resolveConfig(pluginConfig);
 
   const rootGoMod = path.join(cwd, 'go.mod');
-  if (!fs.existsSync(rootGoMod)) {
+  if (!(await exists(rootGoMod))) {
     throw new SemanticReleaseError(
       'go.mod not found.',
       'EMISSINGGOMOD',
@@ -59,7 +84,7 @@ export async function verifyConditions(
   const repository = GitRepository.open({ cwd, run: runner });
   await repository.version();
 
-  const submodules = GoModule.discover(cwd, config.modules, logger);
+  const submodules = await GoModule.discover(cwd, config.modules, logger);
   // A directory git cannot tag is found now, not after the release commit.
   const modules = [GoModule.open(rootGoMod), ...submodules];
   await Release.check(
@@ -80,10 +105,13 @@ export async function verifyConditions(
  *
  * Optionally runs `go mod tidy` in each submodule directory afterward.
  * The actual commit is handled by `@semantic-release/git`.
- *
- * @param pluginConfig The plugin configuration.
- * @param context      The semantic-release context.
- * @param runner       Program runner (injectable for testing).
+ * @param pluginConfig - The plugin configuration.
+ * @param context - The semantic-release context.
+ * @param runner - Program runner (injectable for testing).
+ * @throws SemanticReleaseError `ETAGMISMATCH` or `EINVALIDTAG` when a tag is unusable.
+ * @rejects SemanticReleaseError `ETAGMISMATCH` or `EINVALIDTAG` when a tag is unusable.
+ * @example
+ * await prepare({ skipGoModTidy: true }, context);
  */
 export async function prepare(
   pluginConfig: GomodPluginConfig,
@@ -98,10 +126,10 @@ export async function prepare(
   const config = resolveConfig(pluginConfig);
 
   const root = GoModule.open(path.join(cwd, 'go.mod'), { run: runner });
-  const rootModule = root.modulePath();
+  const rootModule = await root.modulePath();
   logger.log('Root module: %s', rootModule);
 
-  const submodules = GoModule.discover(cwd, config.modules, QUIET, {
+  const submodules = await GoModule.discover(cwd, config.modules, QUIET, {
     run: runner,
   });
   // Stop before any file is rewritten if a tag cannot be created later.
@@ -120,18 +148,18 @@ export async function prepare(
 
   for (const submodule of submodules) {
     logger.log('Pinning requires in %s', path.relative(cwd, submodule.file));
-    submodule.pin(rootModule, version);
+    await submodule.pin(rootModule, version);
 
     if (config.skipGoModTidy) continue;
     const directory = path.relative(cwd, path.dirname(submodule.file));
     try {
       await submodule.tidy();
       logger.log('go mod tidy OK in %s', directory);
-    } catch (err: unknown) {
+    } catch (error: unknown) {
       logger.warn(
         'go mod tidy failed in %s: %s',
         directory,
-        redactCredentials(messageOf(err)),
+        redactCredentials(messageOf(error)),
       );
     }
   }
@@ -143,13 +171,17 @@ export async function prepare(
  * Create and push a git tag for every module in the repository,
  * including the root module.
  *
- * semantic-release creates the root tag (`vX.Y.Z`) before calling
+ * Semantic-release creates the root tag (`vX.Y.Z`) before calling
  * publish; this step skips it when it already exists at `HEAD` and then
  * creates all submodule tags (e.g. `assert/cert/manager/vX.Y.Z`).
- *
- * @param pluginConfig The plugin configuration.
- * @param context      The semantic-release context.
- * @param runner       Program runner (injectable for testing).
+ * @param pluginConfig - The plugin configuration.
+ * @param context - The semantic-release context.
+ * @param runner - Program runner (injectable for testing).
+ * @throws SemanticReleaseError `ETAGMISMATCH` or `EINVALIDTAG` when a tag is unusable.
+ * @rejects SemanticReleaseError `ETAGMISMATCH` or `EINVALIDTAG` when a tag is unusable,
+ * or when git fails to create or push a tag.
+ * @example
+ * await publish({ pushTags: true }, context);
  */
 export async function publish(
   pluginConfig: GomodPluginConfig,
@@ -163,10 +195,8 @@ export async function publish(
   const cwd = cwdOf(context);
   const config = resolveConfig(pluginConfig);
 
-  const modules = [
-    GoModule.open(path.join(cwd, 'go.mod')),
-    ...GoModule.discover(cwd, config.modules, QUIET),
-  ];
+  const submodules = await GoModule.discover(cwd, config.modules, QUIET);
+  const modules = [GoModule.open(path.join(cwd, 'go.mod')), ...submodules];
   // Validate every tag before the first one is created or pushed.
   const repository = GitRepository.open({ cwd, run: runner });
   const release = await Release.plan(
