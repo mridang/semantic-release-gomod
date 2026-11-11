@@ -51,7 +51,6 @@ export class Tag {
     this.cwd = options.cwd;
     this.run = options.run;
   }
-  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * The commit the tag points at; an annotated tag is followed to the commit.
@@ -76,8 +75,6 @@ export class Tag {
       throw error;
     }
   }
-  /* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
-  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * Whether git accepts the tag's name. A name starting with `-` is refused
@@ -101,7 +98,6 @@ export class Tag {
       throw error;
     }
   }
-  /* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * Create the tag at `HEAD`, as a lightweight tag.
@@ -159,7 +155,6 @@ export class GitRepository {
   static open(options: GitOptions): GitRepository {
     return new GitRepository(options.cwd, options.run ?? defaultRun);
   }
-  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * Check that git can be run.
@@ -181,7 +176,6 @@ export class GitRepository {
       );
     }
   }
-  /* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * The commit `HEAD` points at.

@@ -397,7 +397,6 @@ export class GoModule {
     const files = await discoverSubmoduleGoMods(root, patterns, logger);
     return files.map((file) => GoModule.open(file, options));
   }
-  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * The module's import path, e.g. `github.com/mridang/wilhelm`.
@@ -434,7 +433,6 @@ export class GoModule {
     }
     return token;
   }
-  /* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * The git tag a release gives this module: its directory relative to the
@@ -451,7 +449,6 @@ export class GoModule {
     if (prefix === '') return `v${version}`;
     return `${prefix}/v${version}`;
   }
-  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * Pin every `require` of the root module (or one of its sub-paths) to a
@@ -501,8 +498,6 @@ export class GoModule {
     }
     return this;
   }
-  /* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
-  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * Run `go mod tidy` in the module's directory.
@@ -516,5 +511,4 @@ export class GoModule {
     await this.run('go', ['mod', 'tidy'], { cwd: path.dirname(this.file) });
     return this;
   }
-  /* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 }

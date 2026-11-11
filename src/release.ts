@@ -61,7 +61,6 @@ export class Release {
     this.planned = planned;
     this.push = push;
   }
-  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * Refuse tag names git would reject, so a bad directory name stops the
@@ -84,8 +83,6 @@ export class Release {
       'A tag is the module directory plus the version, so rename the directory. Git refuses a tag with a space, `~`, `^`, `:`, `?`, `*`, `[`, `\\`, `..` or `@{`, a component that starts with `.` or ends with `.lock`, a trailing `.` or `/`, and a name starting with `-`. The `modules` option only lists modules to include (there is no exclusion syntax), so to leave a directory out, list the other modules explicitly.',
     );
   }
-  /* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
-  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * Plan a release: check the names, then compare every existing tag, local
@@ -143,7 +140,6 @@ export class Release {
       push,
     );
   }
-  /* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
   /**
    * Create each missing tag and, when pushing, push every tag (one push per

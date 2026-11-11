@@ -44,7 +44,6 @@ async function exists(file: string): Promise<boolean> {
     return false;
   }
 }
-/* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
 /**
  * Verify that all preconditions for the plugin are met:
@@ -99,8 +98,6 @@ export async function verifyConditions(
     logger.log('Found %d submodule(s).', submodules.length);
   }
 }
-/* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
-/* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
 /**
  * Pin every submodule `go.mod` require line that references the root
@@ -169,8 +166,6 @@ export async function prepare(
 
   logger.log('Prepared %d submodule(s) for v%s.', submodules.length, version);
 }
-/* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
-/* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
 /**
  * Create and push a git tag for every module in the repository,
@@ -213,6 +208,5 @@ export async function publish(
 
   logger.log('Tagged %d module(s) at v%s.', modules.length, version);
 }
-/* eslint-enable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects but is not in the plugin tag list; preset fix needed */
 
 export default { verifyConditions, prepare, publish } as const;
