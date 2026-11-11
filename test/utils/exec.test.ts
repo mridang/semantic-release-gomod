@@ -3,10 +3,11 @@
  * and the credential-safe errors it rejects with.
  */
 
+import type { ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 
-type Child = { stdin: typeof stdin };
+type Child = { stdin: typeof stdin } | ChildProcess;
 
 const stdin = { on: jest.fn(), end: jest.fn() };
 const execFileMock =
