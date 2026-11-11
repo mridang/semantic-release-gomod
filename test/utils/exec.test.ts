@@ -3,9 +3,10 @@
  * and the credential-safe errors it rejects with.
  */
 
+import { promisify } from 'node:util';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 
-type Callback = (error: unknown, stdout: unknown, stderr: unknown) => void;
+type Child = { stdin: typeof stdin };
 
 const stdin = { on: jest.fn(), end: jest.fn() };
 const execFileMock =
@@ -14,18 +15,22 @@ const execFileMock =
       file: string,
       args: readonly string[],
       options: Record<string, unknown>,
-      callback: Callback,
-    ) => { stdin: typeof stdin }
+    ) => Promise<{ stdout: unknown; stderr: unknown }> & { child: Child }
   >();
+const actual =
+  jest.requireActual<typeof import('node:child_process')>('node:child_process');
 
+// run() promisifies execFile, so the mock stands in for the promisified form.
 jest.unstable_mockModule('node:child_process', () => ({
-  execFile: execFileMock,
+  execFile: Object.assign(jest.fn(), { [promisify.custom]: execFileMock }),
 }));
 
 const { ExecError, run } = await import('../../src/utils/exec.js');
 
 /**
- * Make the next command finish by calling its completion callback.
+ * Make the next command finish the way the promisified `execFile` does: it
+ * resolves with `{ stdout, stderr }`, or rejects with the error carrying
+ * `stdout` and `stderr` properties.
  * @param error - The error the command finishes with, or null on success.
  * @param stdout - The standard output the command reports.
  * @param stderr - The standard error the command reports.
@@ -33,10 +38,28 @@ const { ExecError, run } = await import('../../src/utils/exec.js');
  * finishWith(null, 'out', ''); // the next run() resolves with 'out'
  */
 function finishWith(error: unknown, stdout: unknown, stderr: unknown): void {
-  execFileMock.mockImplementation((_file, _args, _options, done) => {
-    done(error, stdout, stderr);
-    return { stdin };
-  });
+  execFileMock.mockImplementation(() =>
+    Object.assign(outcome(error, stdout, stderr), { child: { stdin } }),
+  );
+}
+
+/**
+ * The promise a promisified `execFile` returns for a command.
+ * @param failure - The error the command finishes with, or null on success.
+ * @param stdout - The standard output the command reports.
+ * @param stderr - The standard error the command reports.
+ * @returns A promise that resolves with the output or rejects with the error.
+ * @example
+ * await outcome(null, 'out', ''); // { stdout: 'out', stderr: '' }
+ */
+function outcome(
+  failure: unknown,
+  stdout: unknown,
+  stderr: unknown,
+): Promise<{ stdout: unknown; stderr: unknown }> {
+  return failure === null
+    ? Promise.resolve({ stdout, stderr })
+    : Promise.reject(Object.assign(failure as object, { stdout, stderr }));
 }
 
 /**
@@ -198,5 +221,88 @@ describe('run', () => {
     expect(await rejection(run('docker', ['pull']))).toEqual(
       expect.objectContaining({ stdout: '', stderr: '' }),
     );
+  });
+
+  it('describes a missing stdout and stderr as empty', async () => {
+    execFileMock.mockImplementation(() =>
+      Object.assign(Promise.reject(new Error('failed')), {
+        child: { stdin },
+      }),
+    );
+
+    expect(await rejection(run('docker', ['pull']))).toEqual(
+      expect.objectContaining({ stdout: '', stderr: '' }),
+    );
+  });
+
+  describe('with the real execFile', () => {
+    beforeEach(() => {
+      execFileMock.mockImplementation((file, args, options) =>
+        promisify(actual.execFile)(file, [...args], {
+          ...options,
+          encoding: 'utf8',
+        }),
+      );
+    });
+
+    const script = (code: string): string[] => ['-e', code];
+
+    it('resolves with the standard output', async () => {
+      expect(
+        await run(process.execPath, script("process.stdout.write('hi')")),
+      ).toBe('hi');
+    });
+
+    it('feeds the input to the command', async () => {
+      expect(
+        await run(
+          process.execPath,
+          script('process.stdin.pipe(process.stdout)'),
+          { input: 'piped' },
+        ),
+      ).toBe('piped');
+    });
+
+    it('rejects with the exit status and the redacted output', async () => {
+      const error = await rejection(
+        run(
+          process.execPath,
+          script(
+            "process.stdout.write('out');process.stderr.write('see https://u:pw0rd@h/x');process.exit(3)",
+          ),
+        ),
+      );
+
+      expect(error).toBeInstanceOf(ExecError);
+      expect(error).toEqual(
+        expect.objectContaining({
+          status: 3,
+          stdout: 'out',
+          stderr: 'see https://***@h/x',
+        }),
+      );
+      expect((error as InstanceType<typeof ExecError>).signal).toBeUndefined();
+    });
+
+    it('rejects with the system code when the program does not exist', async () => {
+      const error = await rejection(run('no-such-program-here', []));
+
+      expect(error).toEqual(
+        expect.objectContaining({ code: 'ENOENT', stdout: '', stderr: '' }),
+      );
+      expect((error as InstanceType<typeof ExecError>).status).toBeUndefined();
+    });
+
+    it('reports a command killed after the timeout as ETIMEDOUT', async () => {
+      expect(
+        await rejection(
+          run(process.execPath, script('setTimeout(() => {}, 60000)'), {
+            timeout: 100,
+          }),
+        ),
+      ).toEqual(
+        expect.objectContaining({ code: 'ETIMEDOUT', signal: 'SIGTERM' }),
+      );
+    });
   });
 });
