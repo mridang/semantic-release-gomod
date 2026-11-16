@@ -10,6 +10,8 @@ import { run as defaultRun, type Runner } from './utils/exec.js';
 /**
  * How to open a `GitRepository`.
  */
+const TAG_REF_LINE = /^([0-9a-f]+)\trefs\/tags\/(.+?)(\^\{\})?$/;
+
 export interface GitOptions {
   /** The repository directory every command runs in. */
   readonly cwd: string;
@@ -216,7 +218,7 @@ export class GitRepository {
     // The peeled entry (`<tag>^{}`) follows its tag object, so it wins.
     return new Map(
       listing.split('\n').flatMap((line) => {
-        const match = /^([0-9a-f]+)\trefs\/tags\/(.+?)(\^\{\})?$/.exec(line);
+        const match = TAG_REF_LINE.exec(line);
         if (!match?.[1] || !match[2]) return [];
         return [[match[2], match[1]] as const];
       }),

@@ -20,7 +20,7 @@ describe('messageOf', () => {
   it('uses the string form of anything else', () => {
     expect(messageOf('plain')).toBe('plain');
     expect(messageOf(42)).toBe('42');
-    expect(messageOf(undefined)).toBe('undefined');
+    expect(messageOf()).toBe('undefined');
   });
 });
 
@@ -56,7 +56,7 @@ describe('statusOf and signalOf', () => {
       signalOf(Object.assign(new Error('x'), { signal: 9 })),
     ).toBeUndefined();
     expect(statusOf('x')).toBeUndefined();
-    expect(signalOf(undefined)).toBeUndefined();
+    expect(signalOf()).toBeUndefined();
   });
 });
 

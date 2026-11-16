@@ -8,9 +8,9 @@
  * @param requires - Lines for the require block, such as `github.com/a/b v1.0.0`.
  * @returns The file contents.
  * @example
- * goMod('github.com/a/b', ['github.com/c/d v1.0.0']);
+ * goModule('github.com/a/b', ['github.com/c/d v1.0.0']);
  */
-export function goMod(
+export function goModule(
   modulePath: string,
   requires: readonly string[] = [],
 ): string {

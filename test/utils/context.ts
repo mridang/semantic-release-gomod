@@ -21,6 +21,8 @@ import { recordingLogger } from './logger.js';
  * @example
  * throw exitedWith(1); // a git "no" answer
  */
+const COMMIT_PEELING_SUFFIX = /\^\{commit\}$/;
+
 export function exitedWith(status: number): Error {
   return Object.assign(new Error(`Command failed with status ${status}`), {
     status,
@@ -59,7 +61,7 @@ export function mockExec(
         .join('\n');
     }
     if (cmd.startsWith(lookup)) {
-      const tag = cmd.slice(lookup.length).replace(/\^\{commit\}$/, '');
+      const tag = cmd.slice(lookup.length).replace(COMMIT_PEELING_SUFFIX, '');
       const commit = Object.hasOwn(existingTags, tag)
         ? existingTags[tag]
         : undefined;
