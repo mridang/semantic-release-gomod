@@ -30,7 +30,7 @@ interface PlannedTag {
  * @example
  * const doubled = await sequentially([1, 2], async (n) => n * 2); // [2, 4]
  */
-function sequentially<T, R>(
+async function sequentially<T, R>(
   items: readonly T[],
   step: (item: T) => Promise<R>,
 ): Promise<readonly R[]> {
@@ -74,7 +74,7 @@ export class Release {
    * await Release.check([repository.tag('assert/v1.2.3')]);
    */
   static async check(tags: readonly Tag[]): Promise<void> {
-    const valid = await sequentially(tags, (tag) => tag.isValid());
+    const valid = await sequentially(tags, async (tag) => tag.isValid());
     const invalid = tags.filter((_tag, index) => !valid[index]);
     if (invalid.length === 0) return;
     throw new SemanticReleaseError(
