@@ -15,7 +15,7 @@ import {
   rawConfig,
   stepContext,
 } from './utils/context.js';
-import { goMod } from './utils/go-mod.js';
+import { goModule } from './utils/go-module.js';
 import { initBare, initRepo } from './utils/repo.js';
 import { withTmp } from './utils/tmpdir.js';
 
@@ -26,6 +26,11 @@ import { withTmp } from './utils/tmpdir.js';
  * @example
  * await exists('/repo/go.mod'); // true
  */
+const GO_MOD_NAME = /go\.mod/;
+const NO_MODULE_DECLARATION = /No module declaration found/;
+const GIT_TAG_OR_PUSH = /^git (tag|push)/;
+const CANNOT_LOCK_REF = /cannot lock ref/;
+
 async function exists(file: string): Promise<boolean> {
   try {
     await access(file);
@@ -47,7 +52,7 @@ describe('default export', () => {
 
 describe('verifyConditions', () => {
   it('passes when go.mod exists and git is available', async () => {
-    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+    await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       const exec = mockExec();
       await expect(
         verifyConditions({}, stepContext(dir).verify, exec),
@@ -71,7 +76,7 @@ describe('verifyConditions', () => {
   });
 
   it('throws ENOGIT when git is not available', async () => {
-    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+    await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       const exec = mockExec(() => {
         throw new Error('git not found');
       });
@@ -85,7 +90,7 @@ describe('verifyConditions', () => {
   });
 
   it('logs that it is in single-module mode when no submodules exist', async () => {
-    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+    await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       const { verify, lines } = stepContext(dir);
       await verifyConditions({}, verify, mockExec());
       expect(lines).toContain(
@@ -96,7 +101,7 @@ describe('verifyConditions', () => {
 
   it('logs the submodule count when submodules are found', async () => {
     await withTmp(
-      { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
+      { 'go.mod': goModule(ROOT), 'sub/go.mod': goModule(`${ROOT}/sub`) },
       async (dir) => {
         const { verify, lines } = stepContext(dir);
         await verifyConditions({}, verify, mockExec());
@@ -106,7 +111,7 @@ describe('verifyConditions', () => {
   });
 
   it('fails with EINVALIDMODULES for a modules option of the wrong type', async () => {
-    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+    await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       await expect(
         verifyConditions(
           rawConfig({ modules: 5 }),
@@ -118,7 +123,7 @@ describe('verifyConditions', () => {
   });
 
   it('runs the real git when no executor is injected', async () => {
-    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+    await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       await expect(
         verifyConditions({}, stepContext(dir).verify),
       ).resolves.toBeUndefined();
@@ -128,8 +133,8 @@ describe('verifyConditions', () => {
 
 describe('a directory name git cannot tag', () => {
   const files = {
-    'go.mod': goMod(ROOT),
-    'bad dir/go.mod': goMod(`${ROOT}/bad`),
+    'go.mod': goModule(ROOT),
+    'bad dir/go.mod': goModule(`${ROOT}/bad`),
   };
   const refuse = (cmd: string): void => {
     if (cmd.includes('bad dir')) throw exitedWith(1);
@@ -145,7 +150,7 @@ describe('a directory name git cannot tag', () => {
 
   it('stops prepare before any go.mod is rewritten or tidied', async () => {
     await withTmp(
-      { ...files, 'ok/go.mod': goMod(`${ROOT}/ok`, [`${ROOT} v1.0.0`]) },
+      { ...files, 'ok/go.mod': goModule(`${ROOT}/ok`, [`${ROOT} v1.0.0`]) },
       async (dir) => {
         const exec = mockExec(refuse);
         await expect(
@@ -175,7 +180,7 @@ describe('a directory name git cannot tag', () => {
   });
 
   it('stops prepare when a tag exists at another commit', async () => {
-    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+    await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       const exec = mockExec(() => undefined, { 'v2.0.0': 'f'.repeat(40) });
       await expect(
         prepare({}, stepContext(dir, '2.0.0').prepare, exec),
@@ -188,9 +193,9 @@ describe('skipped directories and empty patterns', () => {
   it('are reported once, by verifyConditions, not again by prepare and publish', async () => {
     await withTmp(
       {
-        'go.mod': goMod(ROOT),
-        'sub/go.mod': goMod(`${ROOT}/sub`),
-        'vendor/p/go.mod': goMod('x'),
+        'go.mod': goModule(ROOT),
+        'sub/go.mod': goModule(`${ROOT}/sub`),
+        'vendor/p/go.mod': goModule('x'),
       },
       async (dir) => {
         const config = { skipGoModTidy: true, pushTags: false };
@@ -209,7 +214,7 @@ describe('skipped directories and empty patterns', () => {
   });
 
   it('keep an unmatched pattern silent in prepare and publish', async () => {
-    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+    await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       const config = {
         modules: 'nowhere/go.mod',
         skipGoModTidy: true,
@@ -233,7 +238,7 @@ describe('steps without a cwd in the context', () => {
   ])('%s looks for go.mod in the process directory', async (_step, run) => {
     await expect(run()).rejects.toThrow(
       expect.objectContaining({
-        message: expect.stringMatching(/go\.mod/),
+        message: expect.stringMatching(GO_MOD_NAME),
       }),
     );
   });
@@ -251,8 +256,8 @@ describe('steps without a cwd in the context', () => {
 
 describe('prepare', () => {
   const files = {
-    'go.mod': goMod(ROOT),
-    'sub/go.mod': goMod(`${ROOT}/sub`, [`${ROOT} v1.0.0`]),
+    'go.mod': goModule(ROOT),
+    'sub/go.mod': goModule(`${ROOT}/sub`, [`${ROOT} v1.0.0`]),
   };
 
   it('updates submodule requires to the new version', async () => {
@@ -269,7 +274,7 @@ describe('prepare', () => {
   });
 
   it('uses the real executor when none is injected and nothing needs running', async () => {
-    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+    await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       await initRepo(dir);
       await expect(
         prepare(
@@ -302,7 +307,7 @@ describe('prepare', () => {
   });
 
   it('logs and returns when no submodules exist', async () => {
-    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+    await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       const { prepare: ctx, lines } = stepContext(dir);
       await prepare({}, ctx, mockExec());
       expect(lines).toContain(`Root module: %s ${ROOT}`);
@@ -361,14 +366,14 @@ describe('prepare', () => {
     await withTmp({ 'go.mod': 'go 1.21\n' }, async (dir) => {
       await expect(
         prepare({}, stepContext(dir).prepare, mockExec()),
-      ).rejects.toThrow(/No module declaration found/);
+      ).rejects.toThrow(NO_MODULE_DECLARATION);
     });
   });
 });
 
 describe('publish', () => {
   it('runs the real git when no executor is injected', async () => {
-    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+    await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       const git = await initRepo(dir);
       await publish({ pushTags: false }, stepContext(dir).publish);
       const tags = await git('tag', '--list');
@@ -386,7 +391,7 @@ describe('publish with hostile directory names', () => {
     'tags a directory named with %s without running a shell',
     async (_name, name) => {
       await withTmp(
-        { 'go.mod': goMod(ROOT), [`${name}/go.mod`]: goMod(`${ROOT}/x`) },
+        { 'go.mod': goModule(ROOT), [`${name}/go.mod`]: goModule(`${ROOT}/x`) },
         async (dir) => {
           const git = await initRepo(dir);
           await publish({ pushTags: false }, stepContext(dir).publish);
@@ -402,7 +407,7 @@ describe('publish with hostile directory names', () => {
 describe('publish in a real repository', () => {
   it('refuses a tag left at an older commit and creates no other tag', async () => {
     await withTmp(
-      { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
+      { 'go.mod': goModule(ROOT), 'sub/go.mod': goModule(`${ROOT}/sub`) },
       async (dir) => {
         const git = await initRepo(dir);
         await git('tag', 'sub/v1.2.3');
@@ -419,7 +424,7 @@ describe('publish in a real repository', () => {
   it('refuses a tag that exists only on the remote at another commit, before pushing any', async () => {
     await withTmp({}, async (remote) => {
       await withTmp(
-        { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
+        { 'go.mod': goModule(ROOT), 'sub/go.mod': goModule(`${ROOT}/sub`) },
         async (dir) => {
           const git = await initRepo(dir);
           await initBare(remote);
@@ -446,7 +451,7 @@ describe('publish in a real repository', () => {
   it('leaves an annotated tag that is on origin at HEAD alone, and tags the rest', async () => {
     await withTmp({}, async (remote) => {
       await withTmp(
-        { 'go.mod': goMod(ROOT), 'sub/go.mod': goMod(`${ROOT}/sub`) },
+        { 'go.mod': goModule(ROOT), 'sub/go.mod': goModule(`${ROOT}/sub`) },
         async (dir) => {
           const git = await initRepo(dir);
           await initBare(remote);
@@ -466,7 +471,7 @@ describe('publish in a real repository', () => {
   });
 
   it('treats an annotated tag at HEAD as already created', async () => {
-    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+    await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       const git = await initRepo(dir);
       await git('tag', '-a', 'v1.2.3', '-m', 'release');
       await expect(
@@ -480,7 +485,7 @@ describe('publish in a real repository', () => {
     ['a space', 'a b'],
   ])('creates no tag at all when a directory has %s', async (_name, name) => {
     await withTmp(
-      { 'go.mod': goMod(ROOT), [`${name}/go.mod`]: goMod(`${ROOT}/x`) },
+      { 'go.mod': goModule(ROOT), [`${name}/go.mod`]: goModule(`${ROOT}/x`) },
       async (dir) => {
         const git = await initRepo(dir);
         await expect(
@@ -495,8 +500,8 @@ describe('publish in a real repository', () => {
 
 describe('publish with a mocked executor', () => {
   const files = {
-    'go.mod': goMod(ROOT),
-    'pkg/foo/go.mod': goMod(`${ROOT}/pkg/foo`),
+    'go.mod': goModule(ROOT),
+    'pkg/foo/go.mod': goModule(`${ROOT}/pkg/foo`),
   };
   const commands = (exec: ReturnType<typeof mockExec>): readonly string[] =>
     commandsOf(exec);
@@ -538,7 +543,7 @@ describe('publish with a mocked executor', () => {
   });
 
   it('skips tags that already exist at HEAD and still pushes', async () => {
-    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+    await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       const exec = mockExec(() => undefined, { 'v1.2.3': HEAD });
       await expect(
         publish({}, stepContext(dir).publish, exec),
@@ -560,35 +565,35 @@ describe('publish with a mocked executor', () => {
       await expect(
         publish({}, stepContext(dir).publish, exec),
       ).rejects.toMatchObject({ code: 'ETAGMISMATCH' });
-      expect(
-        commands(exec).filter((cmd) => /^git (tag|push)/.test(cmd)),
-      ).toEqual([]);
+      expect(commands(exec).filter((cmd) => GIT_TAG_OR_PUSH.test(cmd))).toEqual(
+        [],
+      );
     });
   });
 
   it('pushes nothing when a tag name is invalid', async () => {
     await withTmp(
-      { 'go.mod': goMod(ROOT), '-dash/go.mod': goMod(`${ROOT}/dash`) },
+      { 'go.mod': goModule(ROOT), '-dash/go.mod': goModule(`${ROOT}/dash`) },
       async (dir) => {
         const exec = mockExec();
         await expect(
           publish({}, stepContext(dir).publish, exec),
         ).rejects.toMatchObject({ code: 'EINVALIDTAG' });
         expect(
-          commands(exec).filter((cmd) => /^git (tag|push)/.test(cmd)),
+          commands(exec).filter((cmd) => GIT_TAG_OR_PUSH.test(cmd)),
         ).toEqual([]);
       },
     );
   });
 
   it('rethrows unexpected tag errors', async () => {
-    await withTmp({ 'go.mod': goMod(ROOT) }, async (dir) => {
+    await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       const exec = mockExec((cmd) => {
         if (cmd.startsWith('git tag'))
           throw new Error('fatal: cannot lock ref');
       });
       await expect(publish({}, stepContext(dir).publish, exec)).rejects.toThrow(
-        /cannot lock ref/,
+        CANNOT_LOCK_REF,
       );
     });
   });

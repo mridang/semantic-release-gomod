@@ -15,6 +15,9 @@ import {
 } from './utils/context.js';
 import { recordingLogger } from './utils/logger.js';
 
+const TWO_MODULE_TAGS = /a\/v1\.0\.0 .*b\/v1\.0\.0/;
+const GIT_TAG_OR_PUSH = /^git (tag|push)/;
+
 const OTHER = 'fedcba9876543210fedcba9876543210fedcba98';
 
 describe('Release.check', () => {
@@ -106,7 +109,7 @@ describe('Release.plan', () => {
         tagsOf(repoWith(exec), ['a/v1.0.0', 'b/v1.0.0']),
         false,
       ),
-    ).rejects.toThrow(/a\/v1\.0\.0 .*b\/v1\.0\.0/);
+    ).rejects.toThrow(TWO_MODULE_TAGS);
   });
 
   it('refuses a name git rejects before it looks at any tag', async () => {
@@ -306,7 +309,7 @@ describe('Release.publish', () => {
       'git push origin refs/tags/a/v1.2.3',
     ]);
     expect(
-      calls.filter((cmd) => /^git (tag|push)/.test(cmd) && cmd.includes('b/')),
+      calls.filter((cmd) => GIT_TAG_OR_PUSH.test(cmd) && cmd.includes('b/')),
     ).toEqual([]);
   });
 
@@ -324,9 +327,9 @@ describe('Release.publish', () => {
       'Pushed tag %s v1.2.3',
       'Tag %s already on origin, skipping a/v1.2.3',
     ]);
-    expect(
-      commandsOf(exec).filter((cmd) => /^git (tag|push)/.test(cmd)),
-    ).toEqual(['git tag -- v1.2.3', 'git push origin refs/tags/v1.2.3']);
+    expect(commandsOf(exec).filter((cmd) => GIT_TAG_OR_PUSH.test(cmd))).toEqual(
+      ['git tag -- v1.2.3', 'git push origin refs/tags/v1.2.3'],
+    );
   });
 
   it('creates a tag that is on origin when the tags are not pushed', async () => {

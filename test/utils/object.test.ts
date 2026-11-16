@@ -16,7 +16,7 @@ describe('isRecord', () => {
     expect(isRecord(null)).toBe(false);
     expect(isRecord([])).toBe(false);
     expect(isRecord('x')).toBe(false);
-    expect(isRecord(undefined)).toBe(false);
+    expect(isRecord()).toBe(false);
   });
 });
 

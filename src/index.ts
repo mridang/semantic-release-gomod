@@ -72,8 +72,8 @@ export async function verifyConditions(
   const cwd = cwdOf(context);
   const config = resolveConfig(pluginConfig);
 
-  const rootGoMod = path.join(cwd, 'go.mod');
-  if (!(await exists(rootGoMod))) {
+  const rootGoModule = path.join(cwd, 'go.mod');
+  if (!(await exists(rootGoModule))) {
     throw new SemanticReleaseError(
       'go.mod not found.',
       'EMISSINGGOMOD',
@@ -86,7 +86,7 @@ export async function verifyConditions(
 
   const submodules = await GoModule.discover(cwd, config.modules, logger);
   // A directory git cannot tag is found now, not after the release commit.
-  const modules = [GoModule.open(rootGoMod), ...submodules];
+  const modules = [GoModule.open(rootGoModule), ...submodules];
   await Release.check(
     modules.map((module) => repository.tag(module.tagName(cwd, '0.0.0'))),
   );

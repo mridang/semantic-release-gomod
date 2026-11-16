@@ -8,6 +8,8 @@ import { GitRepository, Tag } from '../src/git.js';
 import type { ExecOptions, Runner } from '../src/utils/exec.js';
 import { exitedWith } from './utils/context.js';
 
+const GIT_VERSION_OUTPUT = /^git version/;
+
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 const OTHER = 'fedcba9876543210fedcba9876543210fedcba98';
 
@@ -39,7 +41,7 @@ const missingProgram = Object.assign(new Error('spawn git ENOENT'), {
 describe('GitRepository', () => {
   it('uses the real runner when none is given', async () => {
     const repository = GitRepository.open({ cwd: process.cwd() });
-    await expect(repository.version()).resolves.toMatch(/^git version/);
+    await expect(repository.version()).resolves.toMatch(GIT_VERSION_OUTPUT);
   });
 
   describe('version', () => {

@@ -12,6 +12,14 @@ import { run as defaultRun, type Runner } from './utils/exec.js';
 /**
  * The part of the semantic-release context logger the helpers use.
  */
+/** Locale-aware comparer, built once. */
+const collator = new Intl.Collator();
+const MODULE_DIRECTIVE = /^\uFEFF?module(?:\s|\(|$)/;
+const GROUPED_MODULE_DIRECTIVE = /^\uFEFF?module\s*\(/;
+const MODULE_PATH_DIRECTIVE = /^\uFEFF?module\s+(\S+)/;
+const QUOTED_TOKEN = /^(["`])(.*)\1$/;
+const QUOTE_START = /^["`]/;
+
 type Logger = Pick<StepLogger, 'log' | 'warn'>;
 
 /**
@@ -105,14 +113,14 @@ interface Listing {
  */
 async function scan(dir: string): Promise<Listing> {
   const entries = await safeReadDir(dir);
-  const dirs = entries.filter((entry) => entry.isDirectory());
+  const directories = entries.filter((entry) => entry.isDirectory());
   const full = (entry: Dirent): string => path.join(dir, entry.name);
   return {
     files: entries.filter((entry) => entry.isFile()).map((entry) => entry.name),
-    searchable: dirs
+    searchable: directories
       .filter((entry) => !isIgnoredDir(entry.name))
       .map((entry) => full(entry)),
-    ignored: dirs
+    ignored: directories
       .filter((entry) => isIgnoredDir(entry.name))
       .map((entry) => full(entry)),
   };
@@ -141,9 +149,9 @@ async function discoverSubmoduleGoMods(
   globPatterns: readonly string[] | undefined,
   logger: Logger,
 ): Promise<readonly string[]> {
-  const rootGoMod = path.join(root, 'go.mod');
+  const rootGoModule = path.join(root, 'go.mod');
   const isSubmodule = (file: string): boolean =>
-    file !== rootGoMod && isInside(root, file);
+    file !== rootGoModule && isInside(root, file);
   const searches: Search[] = [];
   if (globPatterns && globPatterns.length > 0) {
     for (const pattern of globPatterns) {
@@ -155,34 +163,29 @@ async function discoverSubmoduleGoMods(
   } else {
     searches.push({ pattern: null, found: await walkForGoMods(root) });
   }
-  new Set(
+  for (const dir of new Set(
     searches
       .flatMap(({ found }) => found.skipped)
       .filter((dir) => path.basename(dir) !== '.git'),
-  ).forEach((dir) => {
+  )) {
     logger.log(
       'Not searching %s for modules. Name a go.mod in it in the `modules` option to include it.',
       dir,
     );
-  });
-  searches
-    .filter(
-      ({ pattern, found }) =>
-        pattern !== null && !found.files.some((file) => isSubmodule(file)),
-    )
-    .forEach(({ pattern }) => {
-      logger.warn(
-        'Pattern "%s" in `modules` matched no go.mod files.',
-        pattern,
-      );
-    });
+  }
+  for (const { pattern } of searches.filter(
+    ({ pattern, found }) =>
+      pattern !== null && !found.files.some((file) => isSubmodule(file)),
+  )) {
+    logger.warn('Pattern "%s" in `modules` matched no go.mod files.', pattern);
+  }
   return [
     ...new Set(
       searches
         .flatMap(({ found }) => found.files)
         .filter((file) => isSubmodule(file)),
     ),
-  ].toSorted((a, b) => a.localeCompare(b));
+  ].toSorted((a, b) => collator.compare(a, b));
 }
 
 /**
@@ -315,7 +318,7 @@ async function matchParts(
  *
  * - Root module (`./go.mod`)                → `""` (tag = `"v1.2.3"`)
  * - Submodule (`./assert/cert/manager/go.mod`) → `"assert/cert/manager"`.
- * @param goModPath - Absolute path to the go.mod file.
+ * @param goModulePath - Absolute path to the go.mod file.
  * @param repoRoot - Absolute path to the repository root.
  * @param pathApi - Path implementation (injectable to test Windows paths).
  * @returns Tag prefix with `/` separators (empty for the root module).
@@ -323,12 +326,12 @@ async function matchParts(
  * tagPrefix('/repo/assert/cert/go.mod', '/repo'); // 'assert/cert'
  */
 export function tagPrefix(
-  goModPath: string,
+  goModulePath: string,
   repoRoot: string,
   pathApi: Pick<typeof path, 'relative' | 'dirname' | 'sep'> = path,
 ): string {
   return pathApi
-    .relative(repoRoot, pathApi.dirname(goModPath))
+    .relative(repoRoot, pathApi.dirname(goModulePath))
     .split(pathApi.sep)
     .join('/');
 }
@@ -411,22 +414,22 @@ export class GoModule {
     const content = await readFile(this.file, 'utf8');
     const line = content
       .split('\n')
-      .find((candidate) => /^\uFEFF?module(?:\s|\(|$)/.test(candidate));
+      .find((candidate) => MODULE_DIRECTIVE.test(candidate));
     if (line === undefined) {
       throw new Error(`No module declaration found in ${this.file}`);
     }
-    if (/^\uFEFF?module\s*\(/.test(line)) {
+    if (GROUPED_MODULE_DIRECTIVE.test(line)) {
       throw new Error(
         `Grouped module declarations ("module (") are not supported, found in ${this.file}`,
       );
     }
-    const token = /^\uFEFF?module\s+(\S+)/.exec(line)?.[1];
+    const token = MODULE_PATH_DIRECTIVE.exec(line)?.[1];
     if (token === undefined) {
       throw new Error(`No module declaration found in ${this.file}`);
     }
-    const quoted = /^(["`])(.*)\1$/.exec(token);
+    const quoted = QUOTED_TOKEN.exec(token);
     if (quoted) return quoted[2];
-    if (/^["`]/.test(token)) {
+    if (QUOTE_START.test(token)) {
       throw new Error(
         `Unterminated quote in the module declaration in ${this.file}`,
       );

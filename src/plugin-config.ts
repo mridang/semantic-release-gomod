@@ -9,6 +9,8 @@ import type { Config, VerifyConditionsContext } from 'semantic-release';
 /**
  * The logger semantic-release hands to every step.
  */
+const WILDCARD_CHARACTERS = /[*?[\]{}\\]/;
+
 export type StepLogger = VerifyConditionsContext['logger'];
 
 /**
@@ -147,7 +149,9 @@ function isSupportedPattern(pattern: string): boolean {
     .every(
       (segment) =>
         segment !== '..' &&
-        (segment === '*' || segment === '**' || !/[*?[\]{}\\]/.test(segment)),
+        (segment === '*' ||
+          segment === '**' ||
+          !WILDCARD_CHARACTERS.test(segment)),
     );
 }
 

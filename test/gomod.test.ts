@@ -8,7 +8,7 @@ import { readFile, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import { GoModule, isInside, tagPrefix } from '../src/gomod.js';
 import type { Runner } from '../src/utils/exec.js';
-import { goMod } from './utils/go-mod.js';
+import { goModule } from './utils/go-module.js';
 import { recordingLogger } from './utils/logger.js';
 import { withTmp } from './utils/tmpdir.js';
 
@@ -20,6 +20,15 @@ import { withTmp } from './utils/tmpdir.js';
  * @example
  * const files = await discover('/repo', ['assert/**\/go.mod']);
  */
+const VENDORED_PATH = /vendor|node_modules/;
+const GROUPED_DECLARATIONS_UNSUPPORTED =
+  /Grouped module declarations .* are not supported/;
+const UNTERMINATED_QUOTE = /Unterminated quote/;
+const NO_MODULE_DECLARATION = /No module declaration found/;
+const NO_MODULE_DECLARATION_IN_GO_MOD =
+  /No module declaration found in .*go\.mod/;
+const GROUPED_MODULE = /Grouped module/;
+
 const discover = async (
   root: string,
   patterns?: readonly string[],
@@ -36,7 +45,7 @@ const discover = async (
 describe('GoModule.discover', () => {
   it('returns an empty array when only the root go.mod exists', async () => {
     await withTmp(
-      { 'go.mod': goMod('github.com/example/repo') },
+      { 'go.mod': goModule('github.com/example/repo') },
       async (dir) => {
         expect(await discover(dir)).toEqual([]);
       },
@@ -46,9 +55,9 @@ describe('GoModule.discover', () => {
   it('auto-detects submodule go.mod files, sorted', async () => {
     await withTmp(
       {
-        'go.mod': goMod('github.com/example/repo'),
-        'pkg/b/go.mod': goMod('github.com/example/repo/pkg/b'),
-        'pkg/a/go.mod': goMod('github.com/example/repo/pkg/a'),
+        'go.mod': goModule('github.com/example/repo'),
+        'pkg/b/go.mod': goModule('github.com/example/repo/pkg/b'),
+        'pkg/a/go.mod': goModule('github.com/example/repo/pkg/a'),
       },
       async (dir) => {
         expect(await discover(dir)).toEqual([
@@ -62,10 +71,10 @@ describe('GoModule.discover', () => {
   it('respects glob patterns when provided', async () => {
     await withTmp(
       {
-        'go.mod': goMod('github.com/example/repo'),
-        'assert/foo/go.mod': goMod('github.com/example/repo/assert/foo'),
-        'env/bar/go.mod': goMod('github.com/example/repo/env/bar'),
-        'other/baz/go.mod': goMod('github.com/example/repo/other/baz'),
+        'go.mod': goModule('github.com/example/repo'),
+        'assert/foo/go.mod': goModule('github.com/example/repo/assert/foo'),
+        'env/bar/go.mod': goModule('github.com/example/repo/env/bar'),
+        'other/baz/go.mod': goModule('github.com/example/repo/other/baz'),
       },
       async (dir) => {
         expect(
@@ -83,17 +92,15 @@ describe('GoModule.discover', () => {
     async (pattern) => {
       await withTmp(
         {
-          'go.mod': goMod('github.com/example/repo'),
-          'sub/go.mod': goMod('github.com/example/repo/sub'),
-          'vendor/p/go.mod': goMod('github.com/example/vendored'),
-          'node_modules/p/go.mod': goMod('github.com/example/npm'),
+          'go.mod': goModule('github.com/example/repo'),
+          'sub/go.mod': goModule('github.com/example/repo/sub'),
+          'vendor/p/go.mod': goModule('github.com/example/vendored'),
+          'node_modules/p/go.mod': goModule('github.com/example/npm'),
         },
         async (dir) => {
           const found = await discover(dir, [pattern]);
           expect(found).not.toContain(path.join(dir, 'go.mod'));
-          expect(found.filter((f) => /vendor|node_modules/.test(f))).toEqual(
-            [],
-          );
+          expect(found.filter((f) => VENDORED_PATH.test(f))).toEqual([]);
         },
       );
     },
@@ -104,10 +111,10 @@ describe('GoModule.discover', () => {
     async (patterns) => {
       await withTmp(
         {
-          'go.mod': goMod('github.com/example/repo'),
-          '.git/modules/x/go.mod': goMod('github.com/example/git'),
-          '.tools/y/go.mod': goMod('github.com/example/repo/.tools/y'),
-          '.ci/go.mod': goMod('github.com/example/repo/.ci'),
+          'go.mod': goModule('github.com/example/repo'),
+          '.git/modules/x/go.mod': goModule('github.com/example/git'),
+          '.tools/y/go.mod': goModule('github.com/example/repo/.tools/y'),
+          '.ci/go.mod': goModule('github.com/example/repo/.ci'),
         },
         async (dir) => {
           expect(await discover(dir, patterns)).toEqual([]);
@@ -118,7 +125,7 @@ describe('GoModule.discover', () => {
 
   it('honours a literal path into a dot-directory, which Go cannot release', async () => {
     await withTmp(
-      { '.tools/go.mod': goMod('github.com/example/repo/.tools') },
+      { '.tools/go.mod': goModule('github.com/example/repo/.tools') },
       async (dir) => {
         expect(await discover(dir, ['.tools/go.mod'])).toEqual([
           path.join(dir, '.tools/go.mod'),
@@ -130,9 +137,9 @@ describe('GoModule.discover', () => {
   it('does not walk into a Go module cache kept in a dot-directory', async () => {
     await withTmp(
       {
-        'go.mod': goMod('github.com/example/repo'),
-        '.go/pkg/mod/github.com/a/b@v1.2.3/go.mod': goMod('github.com/a/b'),
-        'sub/go.mod': goMod('github.com/example/repo/sub'),
+        'go.mod': goModule('github.com/example/repo'),
+        '.go/pkg/mod/github.com/a/b@v1.2.3/go.mod': goModule('github.com/a/b'),
+        'sub/go.mod': goModule('github.com/example/repo/sub'),
       },
       async (dir) => {
         expect(await discover(dir)).toEqual([path.join(dir, 'sub/go.mod')]);
@@ -146,9 +153,9 @@ describe('GoModule.discover', () => {
   it('logs each ignored directory it does not search, but not .git', async () => {
     await withTmp(
       {
-        'go.mod': goMod('github.com/example/repo'),
-        'vendor/p/go.mod': goMod('github.com/example/vendored'),
-        'sub/node_modules/q/go.mod': goMod('github.com/example/npm'),
+        'go.mod': goModule('github.com/example/repo'),
+        'vendor/p/go.mod': goModule('github.com/example/vendored'),
+        'sub/node_modules/q/go.mod': goModule('github.com/example/npm'),
         '.git/x': '',
       },
       async (dir) => {
@@ -167,9 +174,9 @@ describe('GoModule.discover', () => {
     async (pattern) => {
       await withTmp(
         {
-          'sub/go.mod': goMod('github.com/example/repo/sub'),
-          'node_modules/a/b/go.mod': goMod('x'),
-          'vendor/a/go.mod': goMod('x'),
+          'sub/go.mod': goModule('github.com/example/repo/sub'),
+          'node_modules/a/b/go.mod': goModule('x'),
+          'vendor/a/go.mod': goModule('x'),
         },
         async (dir) => {
           const { logger, lines } = recordingLogger();
@@ -188,8 +195,8 @@ describe('GoModule.discover', () => {
   it('reports each skipped directory once per run, however many patterns reach it', async () => {
     await withTmp(
       {
-        'sub/go.mod': goMod('github.com/example/repo/sub'),
-        'node_modules/a/go.mod': goMod('x'),
+        'sub/go.mod': goModule('github.com/example/repo/sub'),
+        'node_modules/a/go.mod': goModule('x'),
       },
       async (dir) => {
         const { logger, lines } = recordingLogger();
@@ -207,7 +214,7 @@ describe('GoModule.discover', () => {
 
   it('warns about a pattern that matches nothing, and still returns the rest', async () => {
     await withTmp(
-      { 'sub/go.mod': goMod('github.com/example/repo/sub') },
+      { 'sub/go.mod': goModule('github.com/example/repo/sub') },
       async (dir) => {
         const { logger, lines } = recordingLogger();
         const modules = await GoModule.discover(
@@ -227,8 +234,8 @@ describe('GoModule.discover', () => {
   it('decides what to skip per matched segment, not per pattern', async () => {
     await withTmp(
       {
-        'vendor/x/a/go.mod': goMod('github.com/example/a'),
-        'vendor/x/node_modules/b/go.mod': goMod('github.com/example/b'),
+        'vendor/x/a/go.mod': goModule('github.com/example/a'),
+        'vendor/x/node_modules/b/go.mod': goModule('github.com/example/b'),
       },
       async (dir) => {
         expect(await discover(dir, ['vendor/x/*/go.mod'])).toEqual([
@@ -240,7 +247,7 @@ describe('GoModule.discover', () => {
 
   it('ignores a symlinked go.mod in a glob exactly as auto-discovery does', async () => {
     await withTmp(
-      { 'a/go.mod': goMod('github.com/example/repo/a'), 'link/keep': '' },
+      { 'a/go.mod': goModule('github.com/example/repo/a'), 'link/keep': '' },
       async (dir) => {
         await symlink(
           path.join(dir, 'a/go.mod'),
@@ -257,9 +264,9 @@ describe('GoModule.discover', () => {
   it('honours a literal path into vendor or node_modules', async () => {
     await withTmp(
       {
-        'go.mod': goMod('github.com/example/repo'),
-        'vendor/x/go.mod': goMod('github.com/example/x'),
-        'node_modules/y/go.mod': goMod('github.com/example/y'),
+        'go.mod': goModule('github.com/example/repo'),
+        'vendor/x/go.mod': goModule('github.com/example/x'),
+        'node_modules/y/go.mod': goModule('github.com/example/y'),
       },
       async (dir) => {
         expect(
@@ -279,9 +286,9 @@ describe('GoModule.discover', () => {
   it('finds only the submodule for **/go.mod', async () => {
     await withTmp(
       {
-        'go.mod': goMod('github.com/example/repo'),
-        'sub/go.mod': goMod('github.com/example/repo/sub'),
-        'vendor/p/go.mod': goMod('github.com/example/vendored'),
+        'go.mod': goModule('github.com/example/repo'),
+        'sub/go.mod': goModule('github.com/example/repo/sub'),
+        'vendor/p/go.mod': goModule('github.com/example/vendored'),
       },
       async (dir) => {
         expect(await discover(dir, ['**/go.mod'])).toEqual([
@@ -293,7 +300,7 @@ describe('GoModule.discover', () => {
 
   it('lists a file matched by several patterns once', async () => {
     await withTmp(
-      { 'pkg/a/go.mod': goMod('github.com/example/repo/pkg/a') },
+      { 'pkg/a/go.mod': goModule('github.com/example/repo/pkg/a') },
       async (dir) => {
         expect(await discover(dir, ['pkg/*/go.mod', 'pkg/**/go.mod'])).toEqual([
           path.join(dir, 'pkg/a/go.mod'),
@@ -305,9 +312,9 @@ describe('GoModule.discover', () => {
   it('skips vendor and node_modules directories', async () => {
     await withTmp(
       {
-        'go.mod': goMod('github.com/example/repo'),
-        'vendor/pkg/go.mod': goMod('github.com/example/vendored'),
-        'node_modules/pkg/go.mod': goMod('github.com/example/npm'),
+        'go.mod': goModule('github.com/example/repo'),
+        'vendor/pkg/go.mod': goModule('github.com/example/vendored'),
+        'node_modules/pkg/go.mod': goModule('github.com/example/npm'),
       },
       async (dir) => {
         expect(await discover(dir)).toEqual([]);
@@ -318,9 +325,9 @@ describe('GoModule.discover', () => {
   it('supports a single-level * wildcard in glob patterns', async () => {
     await withTmp(
       {
-        'pkg/a/go.mod': goMod('github.com/example/repo/pkg/a'),
-        'pkg/b/go.mod': goMod('github.com/example/repo/pkg/b'),
-        'pkg/b/deep/go.mod': goMod('github.com/example/repo/pkg/b/deep'),
+        'pkg/a/go.mod': goModule('github.com/example/repo/pkg/a'),
+        'pkg/b/go.mod': goModule('github.com/example/repo/pkg/b'),
+        'pkg/b/deep/go.mod': goModule('github.com/example/repo/pkg/b/deep'),
       },
       async (dir) => {
         expect(await discover(dir, ['pkg/*/go.mod'])).toEqual([
@@ -333,7 +340,7 @@ describe('GoModule.discover', () => {
 
   it('matches a literal path, and ignores one that does not exist', async () => {
     await withTmp(
-      { 'sub/go.mod': goMod('github.com/example/repo/sub') },
+      { 'sub/go.mod': goModule('github.com/example/repo/sub') },
       async (dir) => {
         expect(await discover(dir, ['sub/go.mod', 'missing/go.mod'])).toEqual([
           path.join(dir, 'sub/go.mod'),
@@ -350,7 +357,10 @@ describe('GoModule.discover', () => {
 
   it('ignores a symlink named go.mod, which is not a regular file', async () => {
     await withTmp(
-      { 'real/go.mod': goMod('github.com/example/repo/real'), 'sub/keep': '' },
+      {
+        'real/go.mod': goModule('github.com/example/repo/real'),
+        'sub/keep': '',
+      },
       async (dir) => {
         await symlink(
           path.join(dir, 'real/go.mod'),
@@ -363,7 +373,7 @@ describe('GoModule.discover', () => {
 
   it('matches nothing for a pattern that ends in **', async () => {
     await withTmp(
-      { 'sub/go.mod': goMod('github.com/example/repo/sub') },
+      { 'sub/go.mod': goModule('github.com/example/repo/sub') },
       async (dir) => {
         expect(await discover(dir, ['sub/**'])).toEqual([]);
       },
@@ -376,7 +386,7 @@ describe('GoModule.discover', () => {
 
   it('falls back to auto-discovery for an empty pattern list', async () => {
     await withTmp(
-      { 'sub/go.mod': goMod('github.com/example/repo/sub') },
+      { 'sub/go.mod': goModule('github.com/example/repo/sub') },
       async (dir) => {
         expect(await discover(dir, [])).toEqual([path.join(dir, 'sub/go.mod')]);
       },
@@ -387,7 +397,7 @@ describe('GoModule.discover', () => {
 describe('links and the repository boundary', () => {
   it('does not follow a symlinked directory named literally in a pattern', async () => {
     await withTmp(
-      { 'a/go.mod': goMod('github.com/example/repo/a'), 'other/keep': '' },
+      { 'a/go.mod': goModule('github.com/example/repo/a'), 'other/keep': '' },
       async (dir) => {
         await symlink(path.join(dir, 'a'), path.join(dir, 'dirlink'));
         expect(await discover(dir, ['a/go.mod', 'dirlink/go.mod'])).toEqual([
@@ -399,7 +409,7 @@ describe('links and the repository boundary', () => {
 
   it('does not follow a symlinked directory that leaves the repository', async () => {
     await withTmp(
-      { 'ext/go.mod': goMod('github.com/example/ext') },
+      { 'ext/go.mod': goModule('github.com/example/ext') },
       async (outside) => {
         await withTmp({ keep: '' }, async (dir) => {
           await symlink(path.join(outside, 'ext'), path.join(dir, 'ext'));
@@ -412,7 +422,7 @@ describe('links and the repository boundary', () => {
   });
 
   it('warns about a pattern that only reached a link', async () => {
-    await withTmp({ 'a/go.mod': goMod('x') }, async (dir) => {
+    await withTmp({ 'a/go.mod': goModule('x') }, async (dir) => {
       await symlink(path.join(dir, 'a'), path.join(dir, 'link'));
       const { logger, lines } = recordingLogger();
       await GoModule.discover(dir, ['link/go.mod'], logger);
@@ -427,7 +437,7 @@ describe('GoModule.discover and the repository boundary', () => {
     async (pattern) => {
       await withTmp(
         {
-          'outside/x/go.mod': goMod('github.com/example/x'),
+          'outside/x/go.mod': goModule('github.com/example/x'),
           'repo/a/keep': '',
         },
         async (dir) => {
@@ -446,7 +456,7 @@ describe('GoModule.discover and the repository boundary', () => {
   it('drops a match outside the repository that a sibling directory provides', async () => {
     await withTmp(
       {
-        'outside/x/go.mod': goMod('github.com/example/x'),
+        'outside/x/go.mod': goModule('github.com/example/x'),
         'repo/keep': '',
       },
       async (dir) => {
@@ -501,7 +511,7 @@ describe('isInside', () => {
 describe('GoModule.modulePath', () => {
   it('extracts the module path from a go.mod file', async () => {
     await withTmp(
-      { 'go.mod': goMod('github.com/example/repo') },
+      { 'go.mod': goModule('github.com/example/repo') },
       async (dir) => {
         expect(await GoModule.open(path.join(dir, 'go.mod')).modulePath()).toBe(
           'github.com/example/repo',
@@ -535,7 +545,7 @@ describe('GoModule.modulePath', () => {
     await withTmp({ 'go.mod': content }, async (dir) => {
       await expect(
         GoModule.open(path.join(dir, 'go.mod')).modulePath(),
-      ).rejects.toThrow(/Grouped module declarations .* are not supported/);
+      ).rejects.toThrow(GROUPED_DECLARATIONS_UNSUPPORTED);
     });
   });
 
@@ -547,7 +557,7 @@ describe('GoModule.modulePath', () => {
     await withTmp({ 'go.mod': content }, async (dir) => {
       await expect(
         GoModule.open(path.join(dir, 'go.mod')).modulePath(),
-      ).rejects.toThrow(/Unterminated quote/);
+      ).rejects.toThrow(UNTERMINATED_QUOTE);
     });
   });
 
@@ -558,7 +568,7 @@ describe('GoModule.modulePath', () => {
     await withTmp({ 'go.mod': content }, async (dir) => {
       await expect(
         GoModule.open(path.join(dir, 'go.mod')).modulePath(),
-      ).rejects.toThrow(/No module declaration found/);
+      ).rejects.toThrow(NO_MODULE_DECLARATION);
     });
   });
 
@@ -566,7 +576,7 @@ describe('GoModule.modulePath', () => {
     await withTmp({ 'go.mod': 'go 1.21\n' }, async (dir) => {
       await expect(
         GoModule.open(path.join(dir, 'go.mod')).modulePath(),
-      ).rejects.toThrow(/No module declaration found in .*go\.mod/);
+      ).rejects.toThrow(NO_MODULE_DECLARATION_IN_GO_MOD);
     });
   });
 });
@@ -578,7 +588,7 @@ describe('GoModule.pin', () => {
     version = '2.0.0',
   ): Promise<string> =>
     withTmp(
-      { 'go.mod': goMod('github.com/example/sub', requires) },
+      { 'go.mod': goModule('github.com/example/sub', requires) },
       async (dir) => {
         await GoModule.open(path.join(dir, 'go.mod')).pin(
           'github.com/example/repo',
@@ -613,7 +623,7 @@ describe('GoModule.pin', () => {
   });
 
   it('is a no-op when there is nothing to update', async () => {
-    expect(await update([])).toBe(goMod('github.com/example/sub'));
+    expect(await update([])).toBe(goModule('github.com/example/sub'));
   });
 
   it.each([
@@ -824,7 +834,7 @@ describe('GoModule.pin', () => {
 
   it('treats regex characters in the module path literally', async () => {
     await withTmp(
-      { 'go.mod': goMod('x', ['github.com/aXb/repo v1.0.0']) },
+      { 'go.mod': goModule('x', ['github.com/aXb/repo v1.0.0']) },
       async (dir) => {
         await GoModule.open(path.join(dir, 'go.mod')).pin(
           'github.com/a.b/repo',
@@ -865,7 +875,7 @@ describe('GoModule', () => {
     await withTmp({ 'go.mod': 'module (\n' }, async (dir) => {
       const module = GoModule.open(path.join(dir, 'go.mod'));
       expect(module.file).toBe(path.join(dir, 'go.mod'));
-      await expect(module.modulePath()).rejects.toThrow(/Grouped module/);
+      await expect(module.modulePath()).rejects.toThrow(GROUPED_MODULE);
     });
   });
 
@@ -884,7 +894,7 @@ describe('GoModule', () => {
 
   it('pins and returns itself, so calls chain', async () => {
     await withTmp(
-      { 'go.mod': goMod('x', ['github.com/example/repo v1.0.0']) },
+      { 'go.mod': goModule('x', ['github.com/example/repo v1.0.0']) },
       async (dir) => {
         const module = GoModule.open(path.join(dir, 'go.mod'));
         expect(await module.pin('github.com/example/repo', '2.0.0')).toBe(
@@ -899,7 +909,7 @@ describe('GoModule', () => {
 
   it('discovers modules that carry the runner they were given', async () => {
     await withTmp(
-      { 'a/go.mod': goMod('github.com/example/repo/a') },
+      { 'a/go.mod': goModule('github.com/example/repo/a') },
       async (dir) => {
         const run = jest.fn<Runner>(async () => '');
         const [module] = await GoModule.discover(
