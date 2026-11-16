@@ -233,8 +233,11 @@ describe('steps without a cwd in the context', () => {
   const noCwd = stepContext();
 
   it.each([
-    ['verifyConditions', () => verifyConditions({}, noCwd.verify, mockExec())],
-    ['prepare', () => prepare({}, noCwd.prepare, mockExec())],
+    [
+      'verifyConditions',
+      async () => verifyConditions({}, noCwd.verify, mockExec()),
+    ],
+    ['prepare', async () => prepare({}, noCwd.prepare, mockExec())],
   ])('%s looks for go.mod in the process directory', async (_step, run) => {
     await expect(run()).rejects.toThrow(
       expect.objectContaining({
