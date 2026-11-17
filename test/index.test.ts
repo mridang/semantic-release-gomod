@@ -3,9 +3,9 @@
  * repositories, and the fake git the plugin is given in place of the real one.
  */
 
-import { describe, expect, it } from '@jest/globals';
 import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { describe, expect, it } from '@jest/globals';
 import plugin, { prepare, publish, verifyConditions } from '../src/index.js';
 import {
   commandsOf,
@@ -26,10 +26,10 @@ import { withTmp } from './utils/tmpdir.js';
  * @example
  * await exists('/repo/go.mod'); // true
  */
-const GO_MOD_NAME = /go\.mod/;
-const NO_MODULE_DECLARATION = /No module declaration found/;
-const GIT_TAG_OR_PUSH = /^git (tag|push)/;
-const CANNOT_LOCK_REF = /cannot lock ref/;
+const GO_MOD_NAME = /go\.mod/u;
+const NO_MODULE_DECLARATION = /No module declaration found/u;
+const GIT_TAG_OR_PUSH = /^git (tag|push)/u;
+const CANNOT_LOCK_REF = /cannot lock ref/u;
 
 async function exists(file: string): Promise<boolean> {
   try {
@@ -137,7 +137,9 @@ describe('a directory name git cannot tag', () => {
     'bad dir/go.mod': goModule(`${ROOT}/bad`),
   };
   const refuse = (cmd: string): void => {
-    if (cmd.includes('bad dir')) throw exitedWith(1);
+    if (cmd.includes('bad dir')) {
+      throw exitedWith(1);
+    }
   };
 
   it('stops verifyConditions, before any release commit exists', async () => {
@@ -337,8 +339,9 @@ describe('prepare', () => {
   it('warns and continues when go mod tidy fails', async () => {
     await withTmp(files, async (dir) => {
       const exec = mockExec((cmd) => {
-        if (cmd.startsWith('go '))
+        if (cmd.startsWith('go ')) {
           throw new Error('go: module lookup disabled');
+        }
       });
       const { prepare: ctx, lines } = stepContext(dir, '2.0.0');
       await expect(prepare({}, ctx, exec)).resolves.toBeUndefined();
@@ -351,10 +354,11 @@ describe('prepare', () => {
   it('redacts credentials in URLs from the go mod tidy warning', async () => {
     await withTmp(files, async (dir) => {
       const exec = mockExec((cmd) => {
-        if (cmd.startsWith('go '))
+        if (cmd.startsWith('go ')) {
           throw new Error(
             `go: https://user:s3cret${AT}proxy.example.com/x failed`,
           );
+        }
       });
       const { prepare: ctx, lines } = stepContext(dir, '2.0.0');
       await prepare({}, ctx, exec);
@@ -387,8 +391,11 @@ describe('publish', () => {
 
 describe('publish with hostile directory names', () => {
   it.each([
+    // eslint-disable-next-line no-template-curly-in-string -- the text is a shell expansion that must reach the command unexpanded
     ['a command substitution', '$(touch${IFS}INJECTED)'],
+    // eslint-disable-next-line no-template-curly-in-string -- the text is a shell expansion that must reach the command unexpanded
     ['backticks', '`touch${IFS}INJECTED`'],
+    // eslint-disable-next-line no-template-curly-in-string -- the text is a shell expansion that must reach the command unexpanded
     ['quotes and a semicolon', 'a";touch${IFS}INJECTED;"b\'c'],
   ])(
     'tags a directory named with %s without running a shell',
@@ -592,8 +599,9 @@ describe('publish with a mocked executor', () => {
   it('rethrows unexpected tag errors', async () => {
     await withTmp({ 'go.mod': goModule(ROOT) }, async (dir) => {
       const exec = mockExec((cmd) => {
-        if (cmd.startsWith('git tag'))
+        if (cmd.startsWith('git tag')) {
           throw new Error('fatal: cannot lock ref');
+        }
       });
       await expect(publish({}, stepContext(dir).publish, exec)).rejects.toThrow(
         CANNOT_LOCK_REF,

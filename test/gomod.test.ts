@@ -3,14 +3,14 @@
  * temporary directory trees.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
 import { readFile, symlink } from 'node:fs/promises';
 import path from 'node:path';
+import { describe, expect, it, jest } from '@jest/globals';
 import { GoModule, isInside, tagPrefix } from '../src/gomod.js';
-import type { Runner } from '../src/utils/exec.js';
 import { goModule } from './utils/go-module.js';
 import { recordingLogger } from './utils/logger.js';
 import { withTmp } from './utils/tmpdir.js';
+import type { Runner } from '../src/utils/exec.js';
 
 /**
  * Discover submodules, ignoring what is logged.
@@ -20,14 +20,14 @@ import { withTmp } from './utils/tmpdir.js';
  * @example
  * const files = await discover('/repo', ['assert/**\/go.mod']);
  */
-const VENDORED_PATH = /vendor|node_modules/;
+const VENDORED_PATH = /vendor|node_modules/u;
 const GROUPED_DECLARATIONS_UNSUPPORTED =
-  /Grouped module declarations .* are not supported/;
-const UNTERMINATED_QUOTE = /Unterminated quote/;
-const NO_MODULE_DECLARATION = /No module declaration found/;
+  /Grouped module declarations .* are not supported/u;
+const UNTERMINATED_QUOTE = /Unterminated quote/u;
+const NO_MODULE_DECLARATION = /No module declaration found/u;
 const NO_MODULE_DECLARATION_IN_GO_MOD =
-  /No module declaration found in .*go\.mod/;
-const GROUPED_MODULE = /Grouped module/;
+  /No module declaration found in .*go\.mod/u;
+const GROUPED_MODULE = /Grouped module/u;
 
 const discover = async (
   root: string,
@@ -185,8 +185,9 @@ describe('GoModule.discover', () => {
           // their contents are never listed.
           const skipped = lines.filter((l) => l.startsWith('Not searching'));
           expect(skipped).toHaveLength(2);
-          expect(lines.join('\n')).toContain(path.join(dir, 'node_modules'));
-          expect(lines.join('\n')).toContain(path.join(dir, 'vendor'));
+          const output = lines.join('\n');
+          expect(output).toContain(path.join(dir, 'node_modules'));
+          expect(output).toContain(path.join(dir, 'vendor'));
         },
       );
     },

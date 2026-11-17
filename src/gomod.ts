@@ -3,22 +3,23 @@
  * asynchronous file access throughout.
  */
 
-import type { Dirent } from 'node:fs';
 import { lstat, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { run } from './utils/exec.js';
+import type { Runner } from './utils/exec.js';
 import type { StepLogger } from './plugin-config.js';
-import { run as defaultRun, type Runner } from './utils/exec.js';
+import type { Dirent } from 'node:fs';
 
 /**
  * The part of the semantic-release context logger the helpers use.
  */
 /** Locale-aware comparer, built once. */
 const collator = new Intl.Collator();
-const MODULE_DIRECTIVE = /^\uFEFF?module(?:\s|\(|$)/;
-const GROUPED_MODULE_DIRECTIVE = /^\uFEFF?module\s*\(/;
-const MODULE_PATH_DIRECTIVE = /^\uFEFF?module\s+(\S+)/;
-const QUOTED_TOKEN = /^(["`])(.*)\1$/;
-const QUOTE_START = /^["`]/;
+const MODULE_DIRECTIVE = /^\uFEFF?module(?:\s|\(|$)/u;
+const GROUPED_MODULE_DIRECTIVE = /^\uFEFF?module\s*\(/u;
+const MODULE_PATH_DIRECTIVE = /^\uFEFF?module\s+(\S+)/u;
+const QUOTED_TOKEN = /^(["`])(.*)\1$/u;
+const QUOTE_START = /^["`]/u;
 
 type Logger = Pick<StepLogger, 'log' | 'warn'>;
 
@@ -152,17 +153,16 @@ async function discoverSubmoduleGoMods(
   const rootGoModule = path.join(root, 'go.mod');
   const isSubmodule = (file: string): boolean =>
     file !== rootGoModule && isInside(root, file);
-  const searches: Search[] = [];
-  if (globPatterns && globPatterns.length > 0) {
-    for (const pattern of globPatterns) {
-      searches.push({
-        pattern,
-        found: await matchParts(root, pattern.split('/')),
-      });
-    }
-  } else {
-    searches.push({ pattern: null, found: await walkForGoMods(root) });
-  }
+  const searches: readonly Search[] =
+    globPatterns && globPatterns.length > 0
+      ? await Promise.all(
+          globPatterns.map(async (pattern) => ({
+            pattern,
+            found: await matchParts(root, pattern.split('/')),
+          })),
+        )
+      : [{ pattern: null, found: await walkForGoMods(root) }];
+  // eslint-disable-next-line functional/no-loop-statements -- reports each skipped directory
   for (const dir of new Set(
     searches
       .flatMap(({ found }) => found.skipped)
@@ -173,6 +173,7 @@ async function discoverSubmoduleGoMods(
       dir,
     );
   }
+  // eslint-disable-next-line functional/no-loop-statements -- reports each pattern that matched nothing
   for (const { pattern } of searches.filter(
     ({ pattern, found }) =>
       pattern !== null && !found.files.some((file) => isSubmodule(file)),
@@ -199,16 +200,13 @@ async function discoverSubmoduleGoMods(
  */
 async function walkForGoMods(dir: string): Promise<Found> {
   const { files, searchable, ignored } = await scan(dir);
-  const parts: Found[] = [
+  return merge([
     {
       files: files.includes('go.mod') ? [path.join(dir, 'go.mod')] : [],
       skipped: ignored,
     },
-  ];
-  for (const sub of searchable) {
-    parts.push(await walkForGoMods(sub));
-  }
-  return merge(parts);
+    ...(await Promise.all(searchable.map(async (sub) => walkForGoMods(sub)))),
+  ]);
 }
 
 /**
@@ -269,21 +267,22 @@ async function matchParts(
   parts: readonly string[],
 ): Promise<Found> {
   const none: Found = { files: [], skipped: [] };
-  if (parts.length === 0) return none;
+  if (parts.length === 0) {
+    return none;
+  }
   const [head, ...tail] = parts;
 
   if (head === '**') {
     // Zero levels: continue with the tail from the current dir.
     // One or more levels: descend into each subdirectory.
     const { searchable, ignored } = await scan(dir);
-    const parts2: Found[] = [
+    return merge([
       await matchParts(dir, tail),
       { files: [], skipped: ignored },
-    ];
-    for (const sub of searchable) {
-      parts2.push(await matchParts(sub, parts));
-    }
-    return merge(parts2);
+      ...(await Promise.all(
+        searchable.map(async (sub) => matchParts(sub, parts)),
+      )),
+    ]);
   }
 
   if (tail.length === 0) {
@@ -300,11 +299,12 @@ async function matchParts(
   if (head === '*') {
     // Single-level wildcard
     const { searchable, ignored } = await scan(dir);
-    const parts2: Found[] = [{ files: [], skipped: ignored }];
-    for (const sub of searchable) {
-      parts2.push(await matchParts(sub, tail));
-    }
-    return merge(parts2);
+    return merge([
+      { files: [], skipped: ignored },
+      ...(await Promise.all(
+        searchable.map(async (sub) => matchParts(sub, tail)),
+      )),
+    ]);
   }
 
   // Literal segment: a missing path, or a link, matches nothing.
@@ -376,7 +376,7 @@ export class GoModule {
    * const goMod = GoModule.open('/repo/assert/go.mod');
    */
   static open(file: string, options: GoModuleOptions = {}): GoModule {
-    return new GoModule(file, options.run ?? defaultRun);
+    return new GoModule(file, options.run ?? run);
   }
 
   /**
@@ -428,7 +428,9 @@ export class GoModule {
       throw new Error(`No module declaration found in ${this.file}`);
     }
     const quoted = QUOTED_TOKEN.exec(token);
-    if (quoted) return quoted[2];
+    if (quoted) {
+      return quoted[2];
+    }
     if (QUOTE_START.test(token)) {
       throw new Error(
         `Unterminated quote in the module declaration in ${this.file}`,
@@ -449,7 +451,9 @@ export class GoModule {
    */
   tagName(root: string, version: string): string {
     const prefix = tagPrefix(this.file, root);
-    if (prefix === '') return `v${version}`;
+    if (prefix === '') {
+      return `v${version}`;
+    }
     return `${prefix}/v${version}`;
   }
 
@@ -467,7 +471,7 @@ export class GoModule {
     const content = await readFile(this.file, 'utf8');
     // Escape slashes and dots in the module path for use in regex
     const escaped = rootModule.replaceAll(
-      /[.*+?^${}()|[\]\\]/g,
+      /[.*+?^${}()|[\]\\]/gu,
       String.raw`\$&`,
     );
     // The path must be the root module or one of its sub-paths, so `repo` does
@@ -481,17 +485,17 @@ export class GoModule {
     const versionPattern = String.raw`(${quote})([ \t]+)v[0-9]\S*`;
     const inBlock = new RegExp(
       String.raw`^([ \t]*${requirePath})${versionPattern}`,
-      'gm',
+      'gmu',
     );
     const single = new RegExp(
       String.raw`^([ \t]*require[ \t]+${requirePath})${versionPattern}`,
-      'gm',
+      'gmu',
     );
     const pin = `$1$2$3v${version}`;
     // Only `require` directives are pinned, never replace, exclude or retract.
     const updated = content
       .replaceAll(
-        /(^[ \t]*require[ \t]*\([ \t]*(?:\/\/[^\r\n]*)?\r?\n)([\s\S]*?)(^[ \t]*\))/gm,
+        /(^[ \t]*require[ \t]*\([ \t]*(?:\/\/[^\r\n]*)?\r?\n)([\s\S]*?)(^[ \t]*\))/gmu,
         (_match, open: string, body: string, close: string) =>
           `${open}${body.replace(inBlock, pin)}${close}`,
       )

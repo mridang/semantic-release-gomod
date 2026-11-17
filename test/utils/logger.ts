@@ -9,13 +9,7 @@
  * const { logger, lines } = recordingLogger();
  * logger.log('Tagged %s', 'v1.2.3'); // lines: ['Tagged %s v1.2.3']
  */
-export function recordingLogger(): {
-  logger: {
-    log: (...args: unknown[]) => void;
-    warn: (...args: unknown[]) => void;
-  };
-  lines: string[];
-} {
+export function recordingLogger() {
   const lines: string[] = [];
   const write = (...args: unknown[]): void => {
     lines.push(args.map(String).join(' '));

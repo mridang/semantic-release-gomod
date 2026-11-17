@@ -5,10 +5,10 @@
 
 import { describe, expect, it, jest } from '@jest/globals';
 import { GitRepository, Tag } from '../src/git.js';
-import type { ExecOptions, Runner } from '../src/utils/exec.js';
 import { exitedWith } from './utils/context.js';
+import type { ExecOptions, Runner } from '../src/utils/exec.js';
 
-const GIT_VERSION_OUTPUT = /^git version/;
+const GIT_VERSION_OUTPUT = /^git version/u;
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 const OTHER = 'fedcba9876543210fedcba9876543210fedcba98';
@@ -20,12 +20,11 @@ const OTHER = 'fedcba9876543210fedcba9876543210fedcba98';
  * @example
  * const { repository, run } = repositoryThat('0123abc');
  */
-function repositoryThat(outcome: string | Error): {
-  readonly repository: GitRepository;
-  readonly run: jest.Mock<Runner>;
-} {
+function repositoryThat(outcome: string | Error) {
   const run = jest.fn<Runner>(async () => {
-    if (outcome instanceof Error) throw outcome;
+    if (outcome instanceof Error) {
+      throw outcome;
+    }
     return outcome;
   });
   return { repository: GitRepository.open({ cwd: '/repo', run }), run };

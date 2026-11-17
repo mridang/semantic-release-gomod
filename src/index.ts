@@ -6,22 +6,20 @@
 import { access } from 'node:fs/promises';
 import path from 'node:path';
 import SemanticReleaseError from '@semantic-release/error';
+import { GitRepository } from './git.js';
+import { GoModule } from './gomod.js';
+import { cwdOf, resolveConfig } from './plugin-config.js';
+import { Release } from './release.js';
+import { messageOf } from './utils/error.js';
+import { run } from './utils/exec.js';
+import { redactCredentials } from './utils/redact.js';
+import type { Runner } from './utils/exec.js';
+import type { GomodPluginConfig } from './plugin-config.js';
 import type {
   PrepareContext,
   PublishContext,
   VerifyConditionsContext,
 } from 'semantic-release';
-import { GitRepository } from './git.js';
-import { GoModule } from './gomod.js';
-import {
-  cwdOf,
-  resolveConfig,
-  type GomodPluginConfig,
-} from './plugin-config.js';
-import { Release } from './release.js';
-import { messageOf } from './utils/error.js';
-import { run, type Runner } from './utils/exec.js';
-import { redactCredentials } from './utils/redact.js';
 
 /**
  * A logger that says nothing. Skipped directories and empty patterns are
@@ -146,11 +144,14 @@ export async function prepare(
     return;
   }
 
+  // eslint-disable-next-line functional/no-loop-statements -- the go commands must run one after the other
   for (const submodule of submodules) {
     logger.log('Pinning requires in %s', path.relative(cwd, submodule.file));
     await submodule.pin(rootModule, version);
 
-    if (config.skipGoModTidy) continue;
+    if (config.skipGoModTidy) {
+      continue;
+    }
     const directory = path.relative(cwd, path.dirname(submodule.file));
     try {
       await submodule.tidy();

@@ -4,15 +4,16 @@
  */
 
 import { jest } from '@jest/globals';
+import { GitRepository } from '../../src/git.js';
+import { recordingLogger } from './logger.js';
+import type { Tag } from '../../src/git.js';
 import type {
   PrepareContext,
   PublishContext,
   VerifyConditionsContext,
 } from 'semantic-release';
-import { GitRepository, type Tag } from '../../src/git.js';
 import type { Runner } from '../../src/utils/exec.js';
 import type { GomodPluginConfig } from '../../src/plugin-config.js';
-import { recordingLogger } from './logger.js';
 
 /**
  * The error a program throws when it exits with a status.
@@ -21,7 +22,7 @@ import { recordingLogger } from './logger.js';
  * @example
  * throw exitedWith(1); // a git "no" answer
  */
-const COMMIT_PEELING_SUFFIX = /\^\{commit\}$/;
+const COMMIT_PEELING_SUFFIX = /\^\{commit\}$/u;
 
 export function exitedWith(status: number): Error {
   return Object.assign(new Error(`Command failed with status ${status}`), {
@@ -54,7 +55,9 @@ export function mockExec(
   const lookup = 'git rev-parse -q --verify refs/tags/';
   return jest.fn<Runner>(async (file, args) => {
     const cmd = [file, ...args].join(' ');
-    if (cmd === 'git rev-parse HEAD') return HEAD;
+    if (cmd === 'git rev-parse HEAD') {
+      return HEAD;
+    }
     if (cmd === 'git ls-remote --tags origin') {
       return Object.entries(remoteTags)
         .map(([tag, commit]) => `${commit}\trefs/tags/${tag}`)
@@ -65,7 +68,9 @@ export function mockExec(
       const commit = Object.hasOwn(existingTags, tag)
         ? existingTags[tag]
         : undefined;
-      if (commit === undefined) throw exitedWith(1);
+      if (commit === undefined) {
+        throw exitedWith(1);
+      }
       return commit;
     }
     behaviour(cmd);
@@ -121,26 +126,18 @@ export function commandsOf(exec: jest.Mock<Runner>): readonly string[] {
  * @example
  * const { verify, lines } = stepContext('/repo');
  */
-export function stepContext(
-  cwd?: string,
-  version = '1.2.3',
-): {
-  readonly lines: string[];
-  readonly verify: VerifyConditionsContext;
-  readonly prepare: PrepareContext;
-  readonly publish: PublishContext;
-} {
+export function stepContext(cwd?: string, version = '1.2.3') {
   const { logger, lines } = recordingLogger();
-  const partial: unknown = {
+  const partial = {
     logger,
     ...(cwd === undefined ? {} : { cwd }),
     nextRelease: { version },
   };
   return {
     lines,
-    verify: partial as VerifyConditionsContext,
-    prepare: partial as PrepareContext,
-    publish: partial as PublishContext,
+    verify: partial as unknown as VerifyConditionsContext,
+    prepare: partial as unknown as PrepareContext,
+    publish: partial as unknown as PublishContext,
   };
 }
 

@@ -9,7 +9,7 @@ import type { Config, VerifyConditionsContext } from 'semantic-release';
 /**
  * The logger semantic-release hands to every step.
  */
-const WILDCARD_CHARACTERS = /[*?[\]{}\\]/;
+const WILDCARD_CHARACTERS = /[*?[\]{}\\]/u;
 
 export type StepLogger = VerifyConditionsContext['logger'];
 
@@ -118,14 +118,26 @@ function resolveFlag(
   value: unknown,
   fallback: boolean,
 ): boolean {
-  if (value === undefined || value === null) return fallback;
-  if (typeof value === 'boolean') return value;
-  if (value === 1) return true;
-  if (value === 0) return false;
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (value === 1) {
+    return true;
+  }
+  if (value === 0) {
+    return false;
+  }
   if (typeof value === 'string') {
     const word = value.trim().toLowerCase();
-    if (word === 'true') return true;
-    if (word === 'false') return false;
+    if (word === 'true') {
+      return true;
+    }
+    if (word === 'false') {
+      return false;
+    }
   }
   throw new SemanticReleaseError(
     `Option '${name}' must be true or false.`,
@@ -185,8 +197,12 @@ function checkPatterns(patterns: readonly string[]): readonly string[] {
  */
 function resolveModules(modules: unknown): readonly string[] | undefined {
   // Any falsy value (undefined, null, false, 0, '') means "not configured".
-  if (!modules) return undefined;
-  if (typeof modules === 'string') return checkPatterns([modules]);
+  if (!modules) {
+    return undefined;
+  }
+  if (typeof modules === 'string') {
+    return checkPatterns([modules]);
+  }
   if (
     Array.isArray(modules) &&
     modules.every((pattern): pattern is string => typeof pattern === 'string')
