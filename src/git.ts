@@ -5,12 +5,13 @@
 
 import SemanticReleaseError from '@semantic-release/error';
 import { statusOf } from './utils/error.js';
-import { run as defaultRun, type Runner } from './utils/exec.js';
+import { run } from './utils/exec.js';
+import type { Runner } from './utils/exec.js';
 
 /**
  * How to open a `GitRepository`.
  */
-const TAG_REF_LINE = /^([0-9a-f]+)\trefs\/tags\/(.+?)(\^\{\})?$/;
+const TAG_REF_LINE = /^([0-9a-f]+)\trefs\/tags\/(.+?)(\^\{\})?$/u;
 
 export interface GitOptions {
   /** The repository directory every command runs in. */
@@ -73,7 +74,9 @@ export class Tag {
       );
       return out.trim();
     } catch (error: unknown) {
-      if (statusOf(error) === 1) return undefined;
+      if (statusOf(error) === 1) {
+        return undefined;
+      }
       throw error;
     }
   }
@@ -89,14 +92,18 @@ export class Tag {
    * const accepted = await repository.tag('assert/v1.2.3').isValid(); // true
    */
   async isValid(): Promise<boolean> {
-    if (this.name.startsWith('-')) return false;
+    if (this.name.startsWith('-')) {
+      return false;
+    }
     try {
       await this.run('git', ['check-ref-format', `refs/tags/${this.name}`], {
         cwd: this.cwd,
       });
       return true;
     } catch (error: unknown) {
-      if (statusOf(error) === 1) return false;
+      if (statusOf(error) === 1) {
+        return false;
+      }
       throw error;
     }
   }
@@ -155,7 +162,7 @@ export class GitRepository {
    * const repository = GitRepository.open({ cwd: process.cwd() });
    */
   static open(options: GitOptions): GitRepository {
-    return new GitRepository(options.cwd, options.run ?? defaultRun);
+    return new GitRepository(options.cwd, options.run ?? run);
   }
 
   /**
@@ -219,7 +226,9 @@ export class GitRepository {
     return new Map(
       listing.split('\n').flatMap((line) => {
         const match = TAG_REF_LINE.exec(line);
-        if (!match?.[1] || !match[2]) return [];
+        if (!match?.[1] || !match[2]) {
+          return [];
+        }
         return [[match[2], match[1]] as const];
       }),
     );

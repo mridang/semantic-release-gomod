@@ -4,7 +4,6 @@
 
 import { describe, expect, it, jest } from '@jest/globals';
 import { Release } from '../src/release.js';
-import type { Runner } from '../src/utils/exec.js';
 import {
   commandsOf,
   exitedWith,
@@ -14,9 +13,10 @@ import {
   tagsOf,
 } from './utils/context.js';
 import { recordingLogger } from './utils/logger.js';
+import type { Runner } from '../src/utils/exec.js';
 
-const TWO_MODULE_TAGS = /a\/v1\.0\.0 .*b\/v1\.0\.0/;
-const GIT_TAG_OR_PUSH = /^git (tag|push)/;
+const TWO_MODULE_TAGS = /a\/v1\.0\.0 .*b\/v1\.0\.0/u;
+const GIT_TAG_OR_PUSH = /^git (tag|push)/u;
 
 const OTHER = 'fedcba9876543210fedcba9876543210fedcba98';
 
@@ -32,7 +32,9 @@ describe('Release.check', () => {
 
   it('refuses every name git rejects, in one coded error', async () => {
     const exec = mockExec((cmd) => {
-      if (cmd.includes('bad')) throw exitedWith(1);
+      if (cmd.includes('bad')) {
+        throw exitedWith(1);
+      }
     });
     await expect(
       Release.check(tagsOf(repoWith(exec), ['v1', 'bad one/v1', 'bad two/v1'])),
@@ -58,7 +60,9 @@ describe('Release.check', () => {
     'rethrows %s instead of calling the tag invalid',
     async (_name, failure) => {
       const exec = mockExec((cmd) => {
-        if (cmd.startsWith('git check-ref-format')) throw failure;
+        if (cmd.startsWith('git check-ref-format')) {
+          throw failure;
+        }
       });
       await expect(
         Release.check(tagsOf(repoWith(exec), ['v1.0.0'])),
@@ -114,7 +118,9 @@ describe('Release.plan', () => {
 
   it('refuses a name git rejects before it looks at any tag', async () => {
     const exec = mockExec((cmd) => {
-      if (cmd.endsWith('refs/tags/bad name/v1.0.0')) throw exitedWith(1);
+      if (cmd.endsWith('refs/tags/bad name/v1.0.0')) {
+        throw exitedWith(1);
+      }
     });
     await expect(
       Release.plan(
@@ -135,7 +141,9 @@ describe('Release.plan', () => {
   it('rethrows a failing tag lookup instead of calling the tag missing', async () => {
     const failure = exitedWith(128);
     const run = jest.fn<Runner>(async (_file, args) => {
-      if (args.includes('--verify')) throw failure;
+      if (args.includes('--verify')) {
+        throw failure;
+      }
       return args[0] === 'rev-parse' ? HEAD : '';
     });
     await expect(
@@ -199,7 +207,9 @@ describe('Release.plan', () => {
 
     it('rethrows a failing ls-remote', async () => {
       const run = jest.fn<Runner>(async (_file, args) => {
-        if (args.includes('ls-remote')) throw exitedWith(128);
+        if (args.includes('ls-remote')) {
+          throw exitedWith(128);
+        }
         return args[0] === 'rev-parse' ? HEAD : '';
       });
       await expect(
@@ -265,7 +275,9 @@ describe('Release.publish', () => {
 
   it('rethrows a tag error without pushing it', async () => {
     const exec = mockExec((cmd) => {
-      if (cmd.startsWith('git tag')) throw new Error('fatal: cannot lock ref');
+      if (cmd.startsWith('git tag')) {
+        throw new Error('fatal: cannot lock ref');
+      }
     });
     const release = await Release.plan(
       repoWith(exec),
@@ -283,11 +295,17 @@ describe('Release.publish', () => {
   it('rethrows a rejected push and pushes no further tag', async () => {
     const calls: string[] = [];
     const run = jest.fn<Runner>(async (file, args) => {
-      await new Promise((resolve) => setTimeout(resolve, 1));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1);
+      });
       const cmd = [file, ...args].join(' ');
       calls.push(cmd);
-      if (cmd === 'git rev-parse HEAD') return HEAD;
-      if (cmd.includes('--verify')) throw exitedWith(1);
+      if (cmd === 'git rev-parse HEAD') {
+        return HEAD;
+      }
+      if (cmd.includes('--verify')) {
+        throw exitedWith(1);
+      }
       if (cmd === 'git push origin refs/tags/a/v1.2.3') {
         throw new Error('remote: rejected');
       }

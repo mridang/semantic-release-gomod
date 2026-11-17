@@ -76,7 +76,9 @@ export class Release {
   static async check(tags: readonly Tag[]): Promise<void> {
     const valid = await sequentially(tags, async (tag) => tag.isValid());
     const invalid = tags.filter((_tag, index) => !valid[index]);
-    if (invalid.length === 0) return;
+    if (invalid.length === 0) {
+      return;
+    }
     throw new SemanticReleaseError(
       `Cannot create tag(s) git rejects: ${invalid.map((tag) => tag.name).join(', ')}.`,
       'EINVALIDTAG',
@@ -114,16 +116,14 @@ export class Release {
       local: await tag.commit(),
       remote: remote.get(tag.name),
     }));
-    const stale = found.flatMap(({ tag, local, remote: onRemote }) => {
-      const problems: string[] = [];
-      if (local !== undefined && local !== head) {
-        problems.push(`${tag.name} (${local})`);
-      }
-      if (onRemote !== undefined && onRemote !== head) {
-        problems.push(`${tag.name} on origin (${onRemote})`);
-      }
-      return problems;
-    });
+    const stale = found.flatMap(({ tag, local, remote: onRemote }) => [
+      ...(local !== undefined && local !== head
+        ? [`${tag.name} (${local})`]
+        : []),
+      ...(onRemote !== undefined && onRemote !== head
+        ? [`${tag.name} on origin (${onRemote})`]
+        : []),
+    ]);
     if (stale.length > 0) {
       throw new SemanticReleaseError(
         `Tag(s) already exist at another commit than HEAD (${head}): ${stale.join(', ')}.`,
@@ -152,6 +152,7 @@ export class Release {
    * const tags = await release.publish(context.logger);
    */
   async publish(logger: Pick<StepLogger, 'log'>): Promise<readonly Tag[]> {
+    // eslint-disable-next-line functional/no-loop-statements -- the git commands must run one after the other
     for (const { tag, exists, onRemote } of this.planned) {
       if (onRemote && this.push) {
         logger.log('Tag %s already on origin, skipping', tag.name);
