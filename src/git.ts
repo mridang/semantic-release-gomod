@@ -145,13 +145,13 @@ export class GitRepository {
   /**
    * Create a repository handle around a directory and a runner.
    * @param cwd - The repository directory.
-   * @param run - Runs git.
+   * @param runner - Runs git.
    * @example
    * const repository = GitRepository.open({ cwd: '/repo' });
    */
-  private constructor(cwd: string, run: Runner) {
+  private constructor(cwd: string, runner: Runner) {
     this.cwd = cwd;
-    this.run = run;
+    this.run = runner;
   }
 
   /**

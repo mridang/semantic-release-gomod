@@ -913,7 +913,7 @@ describe('GoModule', () => {
       { 'a/go.mod': goModule('github.com/example/repo/a') },
       async (dir) => {
         const run = jest.fn<Runner>(async () => '');
-        const [module] = await GoModule.discover(
+        const modules = await GoModule.discover(
           dir,
           undefined,
           recordingLogger().logger,
@@ -921,7 +921,8 @@ describe('GoModule', () => {
             run,
           },
         );
-        await module?.tidy();
+        expect(modules).toHaveLength(1);
+        await modules[0].tidy();
         expect(run).toHaveBeenCalledWith('go', ['mod', 'tidy'], {
           cwd: path.join(dir, 'a'),
         });

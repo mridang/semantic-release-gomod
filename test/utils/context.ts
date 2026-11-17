@@ -7,11 +7,7 @@ import { jest } from '@jest/globals';
 import { GitRepository } from '../../src/git.js';
 import { recordingLogger } from './logger.js';
 import type { Tag } from '../../src/git.js';
-import type {
-  PrepareContext,
-  PublishContext,
-  VerifyConditionsContext,
-} from 'semantic-release';
+import type { VerifyReleaseContext } from 'semantic-release';
 import type { Runner } from '../../src/utils/exec.js';
 import type { GomodPluginConfig } from '../../src/plugin-config.js';
 
@@ -128,17 +124,36 @@ export function commandsOf(exec: jest.Mock<Runner>): readonly string[] {
  */
 export function stepContext(cwd?: string, version = '1.2.3') {
   const { logger, lines } = recordingLogger();
-  const partial = {
+
+  const context = {
     logger,
     ...(cwd === undefined ? {} : { cwd }),
-    nextRelease: { version },
-  };
-  return {
-    lines,
-    verify: partial as unknown as VerifyConditionsContext,
-    prepare: partial as unknown as PrepareContext,
-    publish: partial as unknown as PublishContext,
-  };
+    env: {},
+    envCi: { isCi: false, commit: 'abc123', branch: 'main' },
+    branch: { name: 'main' },
+    branches: [],
+    commits: [],
+    releases: [],
+    options: {},
+    stdout: process.stdout,
+    stderr: process.stderr,
+    lastRelease: {
+      version: '1.2.2',
+      gitTag: 'v1.2.2',
+      channels: [],
+      gitHead: 'abc122',
+      name: 'v1.2.2',
+    },
+    nextRelease: {
+      version,
+      type: 'patch',
+      channel: 'latest',
+      gitTag: `v${version}`,
+      gitHead: 'abc123',
+      name: `v${version}`,
+    },
+  } as VerifyReleaseContext;
+  return { lines, verify: context, prepare: context, publish: context };
 }
 
 /**

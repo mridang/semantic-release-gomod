@@ -166,7 +166,7 @@ async function discoverSubmoduleGoMods(
   for (const dir of new Set(
     searches
       .flatMap(({ found }) => found.skipped)
-      .filter((dir) => path.basename(dir) !== '.git'),
+      .filter((skipped) => path.basename(skipped) !== '.git'),
   )) {
     logger.log(
       'Not searching %s for modules. Name a go.mod in it in the `modules` option to include it.',
@@ -175,8 +175,8 @@ async function discoverSubmoduleGoMods(
   }
   // eslint-disable-next-line functional/no-loop-statements -- reports each pattern that matched nothing
   for (const { pattern } of searches.filter(
-    ({ pattern, found }) =>
-      pattern !== null && !found.files.some((file) => isSubmodule(file)),
+    ({ pattern: searched, found }) =>
+      searched !== null && !found.files.some((file) => isSubmodule(file)),
   )) {
     logger.warn('Pattern "%s" in `modules` matched no go.mod files.', pattern);
   }
@@ -358,13 +358,13 @@ export class GoModule {
   /**
    * Create a module handle for a go.mod file without reading it.
    * @param file - Absolute path to the go.mod file.
-   * @param run - Runs `go`.
+   * @param runner - Runs `go`.
    * @example
    * const module = GoModule.open('/repo/go.mod'); // the public entry point
    */
-  private constructor(file: string, run: Runner) {
+  private constructor(file: string, runner: Runner) {
     this.file = file;
-    this.run = run;
+    this.run = runner;
   }
 
   /**
