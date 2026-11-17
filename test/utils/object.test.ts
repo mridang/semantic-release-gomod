@@ -33,10 +33,7 @@ describe('stringAt', () => {
 
 describe('stringAt with inherited members', () => {
   it('ignores a property that is only inherited', () => {
-    const inherited = Object.setPrototypeOf({}, { a: 'x' }) as Record<
-      string,
-      unknown
-    >;
+    const inherited = { __proto__: { a: 'x' } };
     expect(stringAt(inherited, 'a')).toBeUndefined();
   });
 });

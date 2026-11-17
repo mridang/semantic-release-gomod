@@ -9,7 +9,10 @@ import type { ChildProcess, execFile } from 'node:child_process';
 
 type Child = { stdin: typeof stdin } | ChildProcess;
 
-const stdin = { on: jest.fn(), end: jest.fn() };
+const stdin = {
+  on: jest.fn<(event: string, handler: () => void) => void>(),
+  end: jest.fn(),
+};
 const execFileMock =
   jest.fn<
     (
@@ -40,7 +43,11 @@ const { ExecError, run } = await import('../../src/utils/exec.js');
  * @example
  * finishWith(null, 'out', ''); // the next run() resolves with 'out'
  */
-function finishWith(error: unknown, stdout: unknown, stderr: unknown): void {
+function finishWith(
+  error: Error | null,
+  stdout: unknown,
+  stderr: unknown,
+): void {
   // eslint-disable-next-line @typescript-eslint/promise-function-async -- the mock must return the promise that carries the child property, an async wrapper would drop it
   execFileMock.mockImplementation(() =>
     Object.assign(outcome(error, stdout, stderr), { child: { stdin } }),
@@ -57,17 +64,13 @@ function finishWith(error: unknown, stdout: unknown, stderr: unknown): void {
  * await outcome(null, 'out', ''); // { stdout: 'out', stderr: '' }
  */
 async function outcome(
-  failure: unknown,
+  failure: Error | null,
   stdout: unknown,
   stderr: unknown,
 ): Promise<{ stdout: unknown; stderr: unknown }> {
-  const reason: unknown =
-    failure === null
-      ? null
-      : Object.assign(failure as object, { stdout, stderr });
   return failure === null
     ? Promise.resolve({ stdout, stderr })
-    : Promise.reject(reason);
+    : Promise.reject(Object.assign(failure, { stdout, stderr }));
 }
 
 /**
@@ -77,12 +80,17 @@ async function outcome(
  * @example
  * const error = await rejection(run('git', ['status']));
  */
-async function rejection(promise: Promise<string>): Promise<Error | undefined> {
+async function rejection(
+  promise: Promise<string>,
+): Promise<InstanceType<typeof ExecError> | undefined> {
   try {
     await promise;
     return undefined;
   } catch (error: unknown) {
-    return error instanceof Error ? error : new Error(String(error));
+    if (error instanceof ExecError) {
+      return error;
+    }
+    throw error;
   }
 }
 
@@ -141,9 +149,9 @@ describe('run', () => {
   it('ignores a broken pipe when the command exits before reading its input', async () => {
     await run('docker', ['login'], { input: 'secret' });
 
-    const [event, handler] = stdin.on.mock.calls[0] as [string, () => void];
+    const [event, handler] = stdin.on.mock.calls[0];
     expect(event).toBe('error');
-    expect(handler()).toBeUndefined();
+    expect(() => handler()).not.toThrow();
   });
 
   it('rejects with an ExecError that keeps code, status and signal', async () => {
@@ -178,7 +186,7 @@ describe('run', () => {
     const error = await rejection(run('docker', ['pull']));
 
     expect(error).toEqual(expect.objectContaining({ status: 2 }));
-    expect((error as InstanceType<typeof ExecError>).code).toBeUndefined();
+    expect(error?.code).toBeUndefined();
   });
 
   it('reports a command killed after the timeout as ETIMEDOUT', async () => {
@@ -206,7 +214,7 @@ describe('run', () => {
     const error = await rejection(run('docker', ['build']));
 
     expect(error).toEqual(expect.objectContaining({ signal: 'SIGKILL' }));
-    expect((error as InstanceType<typeof ExecError>).code).toBeUndefined();
+    expect(error?.code).toBeUndefined();
   });
 
   it('redacts credentials in the message of the error', async () => {
@@ -291,7 +299,7 @@ describe('run', () => {
           stderr: 'see https://***@h/x',
         }),
       );
-      expect((error as InstanceType<typeof ExecError>).signal).toBeUndefined();
+      expect(error?.signal).toBeUndefined();
     });
 
     it('rejects with the system code when the program does not exist', async () => {
@@ -300,7 +308,7 @@ describe('run', () => {
       expect(error).toEqual(
         expect.objectContaining({ code: 'ENOENT', stdout: '', stderr: '' }),
       );
-      expect((error as InstanceType<typeof ExecError>).status).toBeUndefined();
+      expect(error?.status).toBeUndefined();
     });
 
     it('reports a command killed after the timeout as ETIMEDOUT', async () => {
